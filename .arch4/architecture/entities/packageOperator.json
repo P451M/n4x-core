@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "entityId": "packageOperator",
+  "paths": [
+    "backend/n4x/cli/packages.py",
+    "backend/n4x/system/packages.py"
+  ],
+  "confidence": "high",
+  "notes": {
+    "responsibility": "Moves Applications and Experiences as n4x.package.v2 .n4xp archives. HTTP PUT /packages stages bytes only; import is a separate MCP step."
+  }
+}

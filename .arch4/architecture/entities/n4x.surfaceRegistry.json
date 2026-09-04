@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "entityId": "n4x.surfaceRegistry",
+  "paths": [
+    "backend/n4x/kernel/surface_types.py"
+  ],
+  "confidence": "high",
+  "notes": {
+    "responsibility": "Versioned browser@1 and mcp_app@1 Surface contracts and builder dispatch keys. There is no kind: pwa; PWA is optional browser.pwa on the / mount."
+  }
+}

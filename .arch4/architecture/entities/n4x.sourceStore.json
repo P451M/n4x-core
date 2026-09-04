@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "entityId": "n4x.sourceStore",
+  "paths": [
+    "backend/n4x/source_store/**"
+  ],
+  "confidence": "high",
+  "notes": {
+    "responsibility": "Graph-canonical SourceTrees and SourceFiles. Host writes official System files here; System authors Application and Experience source here. Filesystem trees are materialized runtime artifacts only."
+  }
+}

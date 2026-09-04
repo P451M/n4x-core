@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "entityId": "n4x.mcpHostAdapter",
+  "paths": [
+    "backend/n4x/system/mcp.py",
+    "backend/n4x/system/host_control.py",
+    "backend/n4x/mcp/surface_apps.py",
+    "backend/n4x/mcp/client_guide.py"
+  ],
+  "confidence": "high",
+  "notes": {
+    "responsibility": "System FastMCP authoring tools plus revision-qualified MCP App resources and Surface-bound bridge tools. import_official_system, enable_system_revision, dump_instance, and inspect_official_release call Host at N4X_HOST_CONTROL_ORIGIN."
+  }
+}

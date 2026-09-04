@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "entityId": "n4x",
+  "paths": [
+    "README.md",
+    "SPEC.md",
+    "pyproject.toml",
+    "scripts/local.sh",
+    "deploy/compose.yaml",
+    "deploy/Dockerfile"
+  ],
+  "confidence": "high",
+  "openQuestions": [
+    "N4X_SYSTEM_RELEASE_INDEX is empty in local compose; Host only compares an official index when that env is set."
+  ],
+  "notes": {
+    "responsibility": "Personal graph-native runtime. One operator per process. Anyone who can reach MCP can change the instance. Not multi-tenant SaaS and not a sandbox for untrusted code.",
+    "local": "scripts/local.sh starts Host + Neo4j on 127.0.0.1:7744. The image listens on 0.0.0.0 inside the container. Public self-host identity is the operator's job.",
+    "image": "deploy/Dockerfile copies Host, graph, secrets, source_store, kernel, contracts, and CLI. It does not copy backend/n4x/system. Official System zip is baked at /opt/n4x/cache/official-system.zip.",
+    "license": "Apache-2.0"
+  }
+}

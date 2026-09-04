@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "entityId": "n4x.httpHost",
+  "paths": [
+    "backend/n4x/system/http.py",
+    "backend/n4x/http/inspector.py"
+  ],
+  "confidence": "high",
+  "openQuestions": [
+    "PUT /packages has no engine auth on loopback. Managed OIDC is outside this repo."
+  ],
+  "notes": {
+    "responsibility": "System worker Starlette app. Host reverse-proxies public HTTP here except /health and /n4x-host. Serves browser Surfaces, Experience bridge, callbacks, package staging, development preview prefixes, and mounts MCP at /mcp. Optional MCP Inspector in development mode."
+  }
+}

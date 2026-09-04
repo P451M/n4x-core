@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "entityId": "n4x.kernel",
+  "paths": [
+    "backend/n4x/kernel/**",
+    "backend/n4x/contracts/mcp_authoring.py",
+    "backend/n4x/contracts/experience_bridge.py",
+    "backend/n4x/contracts/file_delivery.py",
+    "backend/n4x/contracts/callback.py"
+  ],
+  "confidence": "high",
+  "notes": {
+    "responsibility": "Generic types, errors, hashes, paths, and Surface/file/callback contracts. Shared by Host and System. Not a C4 container and not the serve process."
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "entityId": "n4x.system",
+  "paths": [
+    "backend/n4x/system/**"
+  ],
+  "confidence": "high",
+  "notes": {
+    "responsibility": "System worker composition root. Owns GraphUnitOfWork, authoring, activation, packages, jobs, Experience HTTP, and MCP. Host never imports this package. Docker materializes System from the official zip; the image does not copy backend/n4x/system into the Host tree.",
+    "cli": "Started by Host as the single worker behind n4x serve and n4x mcp-stdio."
+  }
+}

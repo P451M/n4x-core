@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "name": "n4x",
+  "createdAt": "2026-08-21T07:29:42.585Z",
+  "source": {
+    "dsl": "workspace.dsl",
+    "entitiesDir": "entities",
+    "buildDir": "build"
+  },
+  "tools": {
+    "arch4": "0.1.0"
+  }
+}

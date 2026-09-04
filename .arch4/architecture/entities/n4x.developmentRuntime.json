@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "entityId": "n4x.developmentRuntime",
+  "paths": [
+    "backend/n4x/system/development_deployments.py",
+    "backend/n4x/system/data_spaces.py",
+    "backend/n4x/system/file_delivery.py",
+    "backend/n4x/system/development_preview.py",
+    "backend/n4x/contracts/execution_context.py"
+  ],
+  "confidence": "high",
+  "notes": {
+    "responsibility": "Single-stack expiring DevelopmentDeployments, candidate hash drift detection, empty or bounded-cloned DataSpaces, deployment-qualified execution and file authority, and expiry cleanup. Application policy remains in trusted app source and clone queries."
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "entityId": "operator",
+  "paths": [
+    "backend/n4x/main.py",
+    "scripts/local.sh"
+  ],
+  "confidence": "high",
+  "notes": {
+    "responsibility": "Starts n4x serve or scripts/local.sh, and uses n4x host import|enable|dump|restore. One Host process per install lock."
+  }
+}

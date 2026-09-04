@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "entityId": "n4x.actionRuntime",
+  "paths": [
+    "backend/n4x/runtime/actions.py",
+    "backend/n4x/runtime/action_runner.py",
+    "backend/n4x/runtime/action_pool.py",
+    "backend/n4x/runtime/environments.py",
+    "backend/n4x/runtime/cypher_gateway.py",
+    "backend/n4x/contracts/action_context.py",
+    "backend/n4x/contracts/subprocess.py",
+    "backend/n4x/contracts/execution_context.py"
+  ],
+  "confidence": "high",
+  "notes": {
+    "responsibility": "Trusted Application child-process execution with DataSpace-scoped snapshots, operations, file mounts, Python environments, pooled children, and declared Cypher context. Materialization and environment preparation are serialized where shared content-addressed resources require it."
+  }
+}

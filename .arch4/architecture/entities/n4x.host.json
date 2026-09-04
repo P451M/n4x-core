@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "entityId": "n4x.host",
+  "paths": [
+    "backend/n4x/host/**",
+    "backend/n4x/main.py",
+    "backend/n4x/cli/**"
+  ],
+  "confidence": "high",
+  "openQuestions": [
+    "Localhost-only /n4x-host is intentional but is not a security boundary once /mcp is reachable.",
+    "N4X_SYSTEM_RELEASE_INDEX is empty in local compose; Host only compares an official index when that env is set."
+  ],
+  "notes": {
+    "responsibility": "Process supervisor, reverse proxy, install file lock, official zip import, materialize from graph, localhost /n4x-host, dump/restore, optional release-index compare. Never imports System Python. First boot imports and enables the official zip when no SystemRevision is active. CLI/MCP import does not enable.",
+    "cli": "n4x serve, n4x mcp-stdio, n4x host import|enable|dump|restore, n4x package stage|fetch, n4x login|logout.",
+    "health": "/health is served by Host, not proxied to the worker.",
+    "officialArchive": "N4X_OFFICIAL_SYSTEM_ARCHIVE or /opt/n4x/cache/official-system.zip. Docker bakes the zip; the Host image does not copy backend/n4x/system.",
+    "dump": "Stops the worker, packs runtime plus Neo4j dump via N4X_NEO4J_DUMP_COMMAND, then restarts."
+  }
+}

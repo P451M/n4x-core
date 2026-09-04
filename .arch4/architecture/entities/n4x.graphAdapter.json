@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "entityId": "n4x.graphAdapter",
+  "paths": [
+    "backend/n4x/graph/**",
+    "backend/n4x/contracts/graph_metamodel.py"
+  ],
+  "confidence": "high",
+  "openQuestions": [
+    "SystemRuntime.from_env() can fall back to InMemoryGraphStore without Neo4j env; n4x serve --neo4j requires Neo4j."
+  ],
+  "notes": {
+    "responsibility": "Neo4j-backed v5 GraphStore, GraphUnitOfWork, composite Application/DataSpace repositories, schema indexes, and integrity bootstrap/repair including validate_graph_shape, repair_graph_edges, and reset_dev_graph. Runtime graph is v5 only. In-memory store is a test adapter."
+  }
+}

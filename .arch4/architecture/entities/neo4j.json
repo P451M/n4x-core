@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "entityId": "neo4j",
+  "paths": [
+    "backend/n4x/graph/neo4j.py",
+    "deploy/compose.yaml"
+  ],
+  "confidence": "high",
+  "notes": {
+    "responsibility": "Required production graph store. n4x serve --neo4j requires N4X_NEO4J_*. Host dump/restore shells N4X_NEO4J_DUMP_COMMAND and N4X_NEO4J_LOAD_COMMAND."
+  }
+}

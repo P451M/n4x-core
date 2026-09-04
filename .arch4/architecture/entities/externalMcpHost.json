@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "entityId": "externalMcpHost",
+  "paths": [
+    "backend/n4x/system/mcp.py",
+    "backend/n4x/mcp/client_guides/orientation.md"
+  ],
+  "confidence": "high",
+  "notes": {
+    "responsibility": "Cursor, Claude, Codex, or another MCP client. HTTP /mcp is the product path; n4x mcp-stdio is Host plus one worker without HTTP."
+  }
+}

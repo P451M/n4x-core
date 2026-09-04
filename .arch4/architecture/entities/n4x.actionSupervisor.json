@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "entityId": "n4x.actionSupervisor",
+  "paths": [
+    "backend/n4x/runtime/action_supervisor.py",
+    "backend/n4x/runtime/scheduler.py",
+    "backend/n4x/system/jobs.py",
+    "backend/n4x/contracts/action_supervisor.py"
+  ],
+  "confidence": "high",
+  "openQuestions": [
+    "TriggerRuntime is annotated as ActionRuntime but receives ActionSupervisor; it works via duck-typed run()."
+  ],
+  "notes": {
+    "responsibility": "System-owned bounded admission, queued/running/terminal Invocation lifecycle, stable-Action overlap rejection, live redacted logs, process-group cancellation, HTTP responsiveness, and Job lease renewal."
+  }
+}

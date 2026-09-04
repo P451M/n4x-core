@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "entityId": "browserUser",
+  "paths": [
+    "backend/n4x/system/http.py",
+    "backend/n4x/kernel/surface_types.py"
+  ],
+  "confidence": "high",
+  "notes": {
+    "responsibility": "Loads active or development-qualified browser Experience Surfaces through Host. PWA is browser.pwa on /."
+  }
+}

@@ -1,0 +1,32 @@
+---
+description: Preserve N4X's lean kernel and powerful trusted Applications
+alwaysApply: true
+---
+
+# Lean Kernel, Powerful Trusted Applications
+
+Default new behavior and policy to a graph-owned Application or Experience.
+
+Before proposing or implementing Kernel/core/transport functionality, prove all:
+
+1. An app cannot implement it correctly with source, objects/relations, actions, triggers, callbacks, secrets, a shared app library, or declared Cypher.
+2. It requires Kernel-only authority: transaction commit, secret backend, process lifecycle, Experience authorization, or HTTP/MCP hosting.
+3. It is generic and understands no app domain nouns, fields, workflows, providers, or business rules.
+4. It is the smallest mechanism; apps retain policy and can choose different behavior.
+5. A concrete failing app use case exists. Convenience, uniformity, inefficient app code, or possible future reuse is insufficient.
+
+Prefer, in order:
+
+1. app-owned action/source;
+2. Experience implementation;
+3. reusable graph-app library, authoring pattern, or blueprint;
+4. existing generic contract or Cypher through the gateway;
+5. minimal new Kernel mechanism.
+
+Keep app-owned: schemas and domain validation, queries/search/indexes, files and attachment semantics, idempotency, concurrency/conflict policy, provider protocols, scheduling/retries, OAuth flows, and public domain errors.
+
+Do not add a generic framework merely to prevent a trusted app from being inefficient. Runtime safeguards may protect shared resources but must not restrict app power or force one domain model.
+
+For every Kernel proposal, state explicitly: **Why can this not be implemented by a trusted Application?** If the answer is not compelling, keep it out of the Kernel.
+
+Normative reference: `SPEC.md` §1.1 and §2.

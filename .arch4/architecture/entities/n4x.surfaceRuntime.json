@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "entityId": "n4x.surfaceRuntime",
+  "paths": [
+    "backend/n4x/runtime/surfaces.py",
+    "backend/n4x/runtime/surface_theme/**"
+  ],
+  "confidence": "high",
+  "notes": {
+    "responsibility": "Vite/React Surface builds, packaged UI theme, and immutable build artifacts. Builds on activation or preview, not first request. Kernel kinds are browser@1 and mcp_app@1 only."
+  }
+}
