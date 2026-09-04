@@ -1,0 +1,15 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+dist/
+build/
+.n4x-runtime/
+deploy/.env
+deploy/.env.local
+deploy/compose.override.yaml
+*.n4xi

@@ -1,0 +1,36 @@
+---
+description: Keep n4x-www public docs in sync with engine sources of truth
+alwaysApply: true
+---
+
+# Public docs live on n4x-www
+
+User-facing documentation is `/docs` in the sibling website repo `n4x-www`,
+not this engine repo. `README.md` here stays the GitHub landing page; it is
+not a substitute for the website docs.
+
+## Sources of truth (this repo)
+
+- `README.md` — pitch, managed vs local/self-host (core only), MCP connect, license
+- `SPEC.md` §§1–3, 7, 12–14, 18 — ontology, Host/System/app boundaries, Surfaces
+- `backend/n4x/mcp/client_guides/*.md` — authoring and operate workflows
+- `scripts/local.sh`, `deploy/` — local Docker only; not a supported public install
+- `docs/adr/` — why a boundary exists; engine-only, not a public product surface
+
+Do not publish: `docs/adr/`, `docs/ACTION_RUNTIME_CAPACITY.md`, internal hashes,
+GHCR/PAT steps, Hetzner or Supabase operator procedure, dated test counts, or
+Host/System internals. Do not cite deleted historical files
+(`IMPLEMENTATION_PLAN.md`, `docs/GRAPH_OWNED_SYSTEM_ARCHITECTURE.md`,
+`docs/HOST_SYSTEM_SPLIT.md`).
+
+## When this repo changes
+
+If a change alters user-visible behavior (MCP tools or connect, ontology,
+Application / Experience / Surface model, local or managed start, secrets,
+packages, CLI, license, or the authoring howto), update the matching
+`n4x-www` `/docs` pages in the same work or the immediate next step. If
+`n4x-www` is not in the workspace, name the pages that must change.
+
+Do not invent APIs, nouns, or Surface kinds. Kernel kinds are `browser` and
+`mcp_app` only; PWA is `browser.pwa` on `/`; desktop vs mobile is layout.
+Prefer the README voice over SPEC voice.

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "entityId": "n4x.surfaceRuntime",
+  "paths": [
+    "backend/n4x/runtime/surfaces.py",
+    "backend/n4x/runtime/surface_theme/**"
+  ],
+  "confidence": "high",
+  "openQuestions": [
+    "backend/n4x/runtime/widget_ui exists on disk but has no remaining code references; treat as leftover until deleted or revived."
+  ],
+  "notes": {
+    "responsibility": "Vite/React Surface builds, packaged UI theme, and immutable build artifacts. Hosts must not build on first request."
+  }
+}

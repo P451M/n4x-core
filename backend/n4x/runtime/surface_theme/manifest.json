@@ -1,0 +1,95 @@
+{
+  "schema_version": "n4x.platform-authoring-seed.v1",
+  "release_version": "n4x-ui-v8",
+  "theme": {
+    "id": "n4x.ui-theme",
+    "title": "N4X Default UI Theme",
+    "preset": "cmn4wp9hz000104lbgtucaj5m",
+    "provenance": {
+      "project": "TweakCN",
+      "repository": "https://github.com/jnsahaj/tweakcn",
+      "source_url": "https://tweakcn.com/r/themes/cmn4wp9hz000104lbgtucaj5m",
+      "adaptation": "Tailwind v4/Vite token sheet"
+    },
+    "license": {
+      "spdx": "Apache-2.0",
+      "url": "https://github.com/jnsahaj/tweakcn/blob/d21c8e3d4071f7f738e46c92470abf9e15bfda04/LICENSE"
+    }
+  },
+  "guide": {
+    "id": "n4x.authoring-guide",
+    "title": "N4X Platform UI Authoring Guide",
+    "provenance": {
+      "publisher": "N4X kernel",
+      "basis": "Pinned TweakCN and shadcn/ui implementation references"
+    },
+    "license": {
+      "spdx": "Apache-2.0"
+    }
+  },
+  "references": [
+    {
+      "id": "dashboard-tweakcn",
+      "name": "TweakCN Dashboard",
+      "url": "https://github.com/jnsahaj/tweakcn/tree/d21c8e3d4071f7f738e46c92470abf9e15bfda04/components/examples/dashboard",
+      "commit_sha": "d21c8e3d4071f7f738e46c92470abf9e15bfda04",
+      "use_for": "Standalone application chrome and composition cues",
+      "do_not_copy": "Demo information architecture, KPIs, charts, labels, or sample data",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "dashboard-shadcn",
+      "name": "shadcn/ui dashboard-01",
+      "url": "https://github.com/shadcn-ui/ui/tree/4e88ab81ae1d1550165db949a903c691a04f699c/apps/v4/registry/new-york-v4/blocks/dashboard-01",
+      "commit_sha": "4e88ab81ae1d1550165db949a903c691a04f699c",
+      "use_for": "Sidebar variant=inset with SidebarInset shell structure",
+      "do_not_copy": "Demo navigation, Acme branding, KPIs, charts, tables, or sample data",
+      "license": "MIT"
+    },
+    {
+      "id": "mail-tweakcn",
+      "name": "TweakCN Mail",
+      "url": "https://github.com/jnsahaj/tweakcn/tree/d21c8e3d4071f7f738e46c92470abf9e15bfda04/components/examples/mail",
+      "commit_sha": "d21c8e3d4071f7f738e46c92470abf9e15bfda04",
+      "use_for": "Inner list, detail, and compose interaction patterns",
+      "do_not_copy": "Demo accounts, folders, messages, contacts, or information architecture",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "tasks-tweakcn",
+      "name": "TweakCN Tasks",
+      "url": "https://github.com/jnsahaj/tweakcn/tree/d21c8e3d4071f7f738e46c92470abf9e15bfda04/components/examples/tasks",
+      "commit_sha": "d21c8e3d4071f7f738e46c92470abf9e15bfda04",
+      "use_for": "Optional dense table, filtering, and control cues",
+      "do_not_copy": "Demo tasks, statuses, priorities, or user identities",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "cards-tweakcn",
+      "name": "TweakCN Cards",
+      "url": "https://github.com/jnsahaj/tweakcn/tree/d21c8e3d4071f7f738e46c92470abf9e15bfda04/components/examples/cards",
+      "commit_sha": "d21c8e3d4071f7f738e46c92470abf9e15bfda04",
+      "use_for": "Optional control grouping and density cues",
+      "do_not_copy": "Demo metrics, forms, accounts, payments, or actions",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "typography-tweakcn",
+      "name": "TweakCN Typography",
+      "url": "https://github.com/jnsahaj/tweakcn/tree/d21c8e3d4071f7f738e46c92470abf9e15bfda04/components/examples/typography",
+      "commit_sha": "d21c8e3d4071f7f738e46c92470abf9e15bfda04",
+      "use_for": "Optional hierarchy, rhythm, and readable density cues",
+      "do_not_copy": "Demo editorial content",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "non-default-shells-tweakcn",
+      "name": "TweakCN Application, Marketing, and Music",
+      "url": "https://github.com/jnsahaj/tweakcn/tree/d21c8e3d4071f7f738e46c92470abf9e15bfda04/components/examples",
+      "commit_sha": "d21c8e3d4071f7f738e46c92470abf9e15bfda04",
+      "use_for": "Explicitly requested specialized experiences only",
+      "do_not_copy": "Do not use these examples as the default standalone application shell",
+      "license": "Apache-2.0"
+    }
+  ]
+}

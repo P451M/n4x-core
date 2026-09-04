@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "n4x"
+version = "0.1.0"
+description = "Graph-native local application runtime for AI-created applications"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Paul Stöckle" }]
+requires-python = ">=3.13"
+dependencies = [
+  "apscheduler>=3.10",
+  "cryptography>=45.0",
+  "fastmcp>=2.0",
+  "httpx>=0.28",
+  "neo4j>=5.28",
+  "pydantic>=2.11",
+  "starlette>=0.49",
+  "typer>=0.16",
+  "uvicorn>=0.35",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.5.0",
+  "pytest>=8.4",
+  "setuptools>=69",
+  "wheel>=0.48.0",
+]
+
+[project.scripts]
+n4x = "n4x.main:app"
+
+[tool.setuptools.packages.find]
+where = ["backend"]
+exclude = [
+  "n4x.system*",
+  "n4x.runtime*",
+  "n4x.mcp*",
+  "n4x.http*",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["backend", "."]
+markers = [
+  "contract: GraphStore and unit-of-work behavioral contracts",
+  "neo4j: requires the configured local Neo4j instance",
+  "acceptance: proof-app reconstruction through generic MCP/HTTP",
+  "pnpm: requires a local pnpm installation for Surface builds",
+]
+
+[project.urls]
+Homepage = "https://n4x.emergingthoughts.org"
+Documentation = "https://n4x.emergingthoughts.org/docs"
+Repository = "https://github.com/P451M/n4x-core"

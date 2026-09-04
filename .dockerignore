@@ -1,0 +1,10 @@
+.git
+.cursor
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+tests
+docs
+*.n4xi
+.arch4

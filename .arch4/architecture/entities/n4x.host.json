@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "entityId": "n4x.host",
+  "paths": [
+    "backend/n4x/host/**",
+    "backend/n4x/main.py"
+  ],
+  "confidence": "high",
+  "openQuestions": [],
+  "notes": {
+    "responsibility": "Process supervisor, reverse proxy, install file lock, official zip import, materialize from graph, localhost enable HTTP, dump/restore. Never imports System Python.",
+    "cli": "n4x serve, n4x mcp-stdio, n4x host import|enable|dump|restore.",
+    "planned": ""
+  }
+}

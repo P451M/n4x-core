@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "entityId": "n4x.packageService",
+  "paths": [
+    "backend/n4x/system/packages.py",
+    "backend/n4x/contracts/package.py"
+  ],
+  "confidence": "high",
+  "notes": {
+    "responsibility": "n4x.package.v2 export/import of Applications and Experiences. Host never auto-installs Office; graph-owned apps are distributed only as archives."
+  }
+}

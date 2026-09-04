@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "entityId": "n4x.graphAdapter",
+  "paths": [
+    "backend/n4x/graph/**",
+    "backend/n4x/contracts/graph_metamodel.py"
+  ],
+  "confidence": "high",
+  "notes": {
+    "responsibility": "Neo4j-backed v5 GraphStore, GraphUnitOfWork, composite Application/DataSpace repositories, schema indexes, and integrity bootstrap/repair. In-memory store is a test adapter only."
+  }
+}

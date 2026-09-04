@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "entityId": "n4x.mcpHostAdapter",
+  "paths": [
+    "backend/n4x/mcp/surface_apps.py",
+    "backend/n4x/system/mcp.py"
+  ],
+  "confidence": "high",
+  "notes": {
+    "responsibility": "System FastMCP authoring tools plus revision-qualified MCP App resources and Surface-bound bridge tools."
+  }
+}

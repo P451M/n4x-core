@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">N4X icon</title>
+  <desc id="desc">A white N4X mark on a black background.</desc>
+
+  <rect width="512" height="512" rx="112" fill="#000"/>
+  <path
+    d="M36 374V138h42l40 148V138h42v236h-42L78 226v148H36zM200 156h36v130H200zM200 250h120v36H200zM284 156h36v200h-36zM358 138h42l76 236h-42zM434 138h42l-76 236h-42z"
+    fill="#fff"
+  />
+</svg>

@@ -1,0 +1,73 @@
+# Local stack: Host on 127.0.0.1:7744 (scripts/local.sh).
+# No public ingress. Identity on a public origin is the operator's to add.
+name: n4x
+
+services:
+  neo4j:
+    image: neo4j:5-community
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: neo4j/${N4X_NEO4J_PASSWORD}
+    volumes:
+      - n4x_neo4j:/data
+      - n4x_dumps:/dumps
+    expose:
+      - "7687"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "cypher-shell -u neo4j -p '${N4X_NEO4J_PASSWORD}' 'RETURN 1' || exit 1",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  n4x:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    environment:
+      N4X_RUNTIME_ROOT: /var/lib/n4x
+      N4X_HTTP_MODE: production
+      N4X_NEO4J_URI: bolt://neo4j:7687
+      N4X_NEO4J_USER: neo4j
+      N4X_NEO4J_PASSWORD: ${N4X_NEO4J_PASSWORD}
+      N4X_NEO4J_DATABASE: neo4j
+      N4X_PUBLIC_ORIGIN: ${N4X_PUBLIC_ORIGIN}
+      N4X_SECRETS_MASTER_KEY: ${N4X_SECRETS_MASTER_KEY}
+      N4X_SECRET_BACKEND: encrypted_local
+      N4X_SYSTEM_RELEASE_INDEX: ${N4X_SYSTEM_RELEASE_INDEX:-}
+      N4X_HOST_CONTROL_ORIGIN: http://127.0.0.1:7744
+      N4X_FILE_DELIVERY_SIGNING_KEY: ${N4X_FILE_DELIVERY_SIGNING_KEY:-}
+      N4X_NEO4J_DUMP_COMMAND: ${N4X_NEO4J_DUMP_COMMAND:-}
+      N4X_NEO4J_LOAD_COMMAND: ${N4X_NEO4J_LOAD_COMMAND:-}
+    volumes:
+      - n4x_data:/var/lib/n4x
+      - n4x_dumps:/dumps
+    expose:
+      - "7744"
+    ports:
+      - "127.0.0.1:7744:7744"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7744/health')",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+volumes:
+  n4x_data:
+  n4x_neo4j:
+  n4x_dumps:

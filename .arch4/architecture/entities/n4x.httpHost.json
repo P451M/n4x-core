@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "entityId": "n4x.httpHost",
+  "paths": [
+    "backend/n4x/http/inspector.py",
+    "backend/n4x/system/http.py",
+    "backend/n4x/host/**"
+  ],
+  "confidence": "high",
+  "notes": {
+    "responsibility": "Host reverse-proxy plus System Starlette app for browser Surfaces, Experience bridge APIs, callback routes, health, and optional MCP Inspector. MCP HTTP is mounted at /mcp."
+  }
+}
