@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3
+
+`apply_source_patch` documents and rejects anything but a unified diff.
+A development preview whose pinned revision is no longer draft or active
+requires a new deployment.
+
 ## 0.2.2
 
 Host waits 120s for a System worker to become healthy and includes the
