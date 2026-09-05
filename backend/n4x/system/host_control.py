@@ -7,11 +7,16 @@ from typing import Any
 
 import httpx
 
+from n4x.system.origins import is_loopback_origin
+
 DEFAULT_ORIGIN = "http://127.0.0.1:7744"
 
 
 def host_control_origin() -> str:
-    return os.getenv("N4X_HOST_CONTROL_ORIGIN", DEFAULT_ORIGIN).rstrip("/")
+    origin = os.getenv("N4X_HOST_CONTROL_ORIGIN", DEFAULT_ORIGIN).rstrip("/")
+    if not is_loopback_origin(origin):
+        raise RuntimeError(f"host control origin must be loopback, got {origin}")
+    return origin
 
 
 def request_host_control(

@@ -177,7 +177,7 @@ def _run_host_http(
             "N4X_HTTP_MODE": mode,
             "N4X_PUBLIC_ORIGIN": base_url,
             "N4X_RUNTIME_ROOT": str(default_runtime_root()),
-            "N4X_HOST_CONTROL_ORIGIN": base_url,
+            "N4X_HOST_CONTROL_ORIGIN": f"http://127.0.0.1:{port}",
             "N4X_INSPECTOR": "1" if inspector_enabled else "0",
             "N4X_INSPECTOR_PORT": str(inspector_port),
             "N4X_INSPECTOR_PROXY_PORT": str(inspector_proxy_port),
