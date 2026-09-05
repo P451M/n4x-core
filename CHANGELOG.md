@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+Clone development deployments bind the Experience's declared secret
+references from the instance vault. Empty deployments stay secret-less.
+Secret values are never copied.
+
 ## 0.2.0
 
 Revisions are interned commits (`n4x.graph.metamodel.v6`, `n4x.mcp.authoring.v9`).
