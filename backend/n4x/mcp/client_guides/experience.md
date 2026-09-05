@@ -5,7 +5,7 @@ Experience does not apply.
 
 ## Authority
 
-Graph SourceFiles are the source of truth. Never copy theme values, component
+Graph source is the source of truth. Writes take `revision_id`. Never copy theme values, component
 lists, pinned references, bridge routes, or authoring-guide text into local
 notes or skills.
 
@@ -33,11 +33,13 @@ separate operation.
 ## Workflow
 
 - Confirm the running N4X MCP server and inspect the target Experience and
-  revision. `create_experience_revision` continues the latest `status=draft`
-  for that Experience, else the active revision.
+  revision via `inspect_system`. `create_experience_revision` takes
+  `parent_revision_id`. If a draft already exists and you omit the parent, or
+  you pass that draft or its parent, the draft is reused. A different parent
+  while a draft exists is an error — `discard_experience_revision` first.
 - Declare or verify Application access before Surface code consumes it.
 - Load `inspect_experience_design_context`.
-- List and read relevant existing graph SourceFiles before deciding what to
+- List and read relevant existing graph source before deciding what to
   replace, extend, or reuse.
 - Establish or reuse the selected component foundation, utilities, and shell
   before broad feature UI.
@@ -92,11 +94,12 @@ to refresh a list you can patch. Do not put a global busy on mark, create, or
 navigate. Open a compose/new route immediately (`new=1`, `compose=1`); do not
 await create and then navigate.
 
-- Graph SourceFiles are the authority. Do not check out a local workspace.
+- Graph source is the authority. Do not check out a local workspace.
   A new file or a rewrite: compose the body — `/tmp` is only scratch — then
-  `write_source_file` with `expected_hash` from the last read. A few surgical
-  hunks: `apply_source_patch` with unique context; line numbers are a hint.
-  Search the tree or read a line range instead of reading every file.
+  `write_source_file` with `revision_id` and `expected_hash` from the last
+  read. A few surgical hunks: `apply_source_patch` with `revision_id` and
+  unique context; line numbers are a hint. Search the tree or read a line
+  range instead of reading every file.
 
 ## MCP App Surfaces
 

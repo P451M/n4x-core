@@ -114,7 +114,7 @@ def test_action_execution_context_reads_and_commits_only_bound_data_space() -> N
         revision.id, "context.Item", name="Item"
     )
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/create.py",
         action_source(
             "def run(ctx, input):\n"
@@ -177,7 +177,7 @@ def test_development_deployment_binds_candidates_and_detects_source_drift() -> N
     revision = system.create_application_revision(app.id)
     system.create_object_type(revision.id, "deployed.Item", name="Item")
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/count.py",
         action_source(
             "def run(ctx, input):\n"
@@ -224,7 +224,7 @@ def test_development_deployment_binds_candidates_and_detects_source_drift() -> N
     ) == 2
 
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "README.md",
         "changed after deployment",
         role="helper",
@@ -321,7 +321,7 @@ def test_development_cypher_audit_carries_execution_context() -> None:
     app = system.create_application("audit-context", "Audit Context")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/read.py",
         (
             "def run(ctx, input):\n"
@@ -364,7 +364,7 @@ def test_expiring_deployment_cancels_running_action_before_purge() -> None:
     app = system.create_application("expire-running", "Expire Running")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/wait.py",
         (
             "import time\n\n"

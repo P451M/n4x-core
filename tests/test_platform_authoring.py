@@ -187,6 +187,7 @@ def test_experience_design_context_is_advisory_and_profile_aware() -> None:
     assert "platform_release" not in skipped
     assert "content" not in skipped.get("authoring_guide", {})
 
+    system.discard_experience_revision(default_revision.id)
     custom_revision = system.create_experience_revision(
         "design-context", ui_profile="custom"
     )

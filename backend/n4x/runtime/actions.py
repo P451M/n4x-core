@@ -16,6 +16,7 @@ from typing import Any, Callable
 
 from n4x.contracts import ACTION_CONTEXT_VERSION, SUBPROCESS_PROTOCOL_VERSION
 from n4x.contracts.file_delivery import FILE_DELIVERY_SIGNING_KEY_ENV
+from n4x.graph.bindings import RevisionBindings
 from n4x.graph.store import GraphStore, node_ref
 from n4x.graph.uow import GraphUnitOfWork
 from n4x.kernel.errors import ActionExecutionError
@@ -115,17 +116,21 @@ class ActionRuntime:
         self.pool = ActionPool()
         self._materialization_locks_guard = threading.Lock()
         self._materialization_locks: dict[str, threading.Lock] = {}
+        self.bindings = RevisionBindings(self.uow)
 
     def shutdown(self) -> None:
         self.pool.shutdown()
 
-    def import_check(self, action_revision: ActionRevision) -> None:
+    def import_check(
+        self, action_revision: ActionRevision, *, application_revision_id: str
+    ) -> None:
         self.uow.require_inactive("check action import")
         module_path, function_name = self._split_entrypoint(action_revision.entrypoint)
-        materialized = self.materialize(action_revision)
-        environment = self.python_environments.prepare(
-            action_revision.application_revision_id
+        materialized = self.materialize(
+            action_revision, application_revision_id=application_revision_id
         )
+        environment = self.python_environments.prepare(application_revision_id)
+        revision = self.graph.revisions[application_revision_id]
         self._run_child(
             action_revision,
             materialized / module_path,
@@ -134,6 +139,11 @@ class ActionRuntime:
             environment.python_executable,
             timeout_seconds=action_revision.timeout_seconds,
             check_only=True,
+            execution_context=ExecutionContext(
+                correlation_id=str(uuid.uuid4()),
+                application_revision_id=revision.id,
+                application_id=revision.application_id,
+            ),
         )
 
     def run(
@@ -160,9 +170,12 @@ class ActionRuntime:
             module_path, function_name = self._split_entrypoint(
                 action_revision.entrypoint
             )
-            materialized = self.materialize(action_revision)
+            materialized = self.materialize(
+                action_revision,
+                application_revision_id=execution_context.application_revision_id,
+            )
             environment = self.python_environments.prepare(
-                action_revision.application_revision_id
+                execution_context.application_revision_id
             )
             process_result = self._run_child(
                 action_revision,
@@ -285,21 +298,12 @@ class ActionRuntime:
         invocation_id: str,
         context: ExecutionContext | None,
     ) -> ExecutionContext:
-        revision = self.graph.revisions[
-            action_revision.application_revision_id
-        ]
         if context is None:
-            context = ExecutionContext(
-                correlation_id=invocation_id,
-                application_revision_id=revision.id,
-                application_id=revision.application_id,
-            )
-        if (
-            context.application_id != revision.application_id
-            or context.application_revision_id != revision.id
-        ):
+            raise ActionExecutionError("ExecutionContext is required")
+        revision = self.graph.revisions[context.application_revision_id]
+        if context.application_id != revision.application_id:
             raise ActionExecutionError(
-                "ExecutionContext does not match the ActionRevision owner"
+                "ExecutionContext does not match the ApplicationRevision"
             )
         data_space = self.graph.data_spaces.get(
             (context.application_id, context.data_space_id)
@@ -325,25 +329,33 @@ class ActionRuntime:
             )
         return context
 
-    def materialize(self, action_revision: ActionRevision) -> Path:
+    def materialize(
+        self, action_revision: ActionRevision, *, application_revision_id: str
+    ) -> Path:
         self.uow.require_inactive("materialize action source")
+        tree = self.bindings.tree(application_revision_id)
+        lock_key = f"{action_revision.id}:{tree.tree_hash}"
         with self._materialization_locks_guard:
-            lock = self._materialization_locks.setdefault(
-                action_revision.content_hash,
-                threading.Lock(),
-            )
+            lock = self._materialization_locks.setdefault(lock_key, threading.Lock())
         with lock:
-            target = (
-                self.paths.root
-                / "actions"
-                / action_revision.content_hash.replace(":", "-")
-            )
-            target.mkdir(parents=True, exist_ok=True)
             materialized_files: list[dict[str, str]] = []
             for source_path in action_revision.source_paths:
-                file = self.source.read_source_file(
-                    action_revision.source_tree_id, source_path
+                file = self.source.read_source_file(tree.id, source_path)
+                materialized_files.append(
+                    {"path": file.path, "hash": file.content_hash}
                 )
+            input_hash = sha256_json(
+                {
+                    "action_revision_id": action_revision.id,
+                    "files": materialized_files,
+                }
+            )
+            target = (
+                self.paths.root / "actions" / input_hash.replace(":", "-")
+            )
+            target.mkdir(parents=True, exist_ok=True)
+            for source_path in action_revision.source_paths:
+                file = self.source.read_source_file(tree.id, source_path)
                 destination = target / file.path
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 if (
@@ -352,34 +364,29 @@ class ActionRuntime:
                     != file.content
                 ):
                     destination.write_text(file.content, encoding="utf-8")
-                materialized_files.append(
-                    {"path": file.path, "hash": file.content_hash}
-                )
             self._record_materialization(
-                action_revision, target, materialized_files
+                action_revision,
+                application_revision_id,
+                target,
+                materialized_files,
+                input_hash,
             )
             return target
 
     def _record_materialization(
         self,
         action_revision: ActionRevision,
+        application_revision_id: str,
         target: Path,
         materialized_files: list[dict[str, str]],
+        input_hash: str,
     ) -> None:
         with self.uow:
-            input_hash = sha256_json(
-                {
-                    "action_revision_id": action_revision.id,
-                    "content_hash": action_revision.content_hash,
-                    "files": materialized_files,
-                }
-            )
             existing = [
                 artifact
                 for artifact in self.graph.build_artifacts.values()
                 if artifact.artifact_type == "materialized_source"
-                and artifact.application_revision_id
-                == action_revision.application_revision_id
+                and artifact.owner_id == application_revision_id
                 and artifact.content_hash == input_hash
             ]
             if existing:
@@ -387,7 +394,8 @@ class ActionRuntime:
             invocation_id = str(uuid.uuid4())
             invocation = BuildInvocation(
                 id=invocation_id,
-                application_revision_id=action_revision.application_revision_id,
+                owner_kind="ApplicationRevision",
+                owner_id=application_revision_id,
                 kind="source_materialization",
                 status="succeeded",
                 input_hash=input_hash,
@@ -398,7 +406,8 @@ class ActionRuntime:
             artifact_id = str(uuid.uuid4())
             artifact = BuildArtifact(
                 id=artifact_id,
-                application_revision_id=action_revision.application_revision_id,
+                owner_kind="ApplicationRevision",
+                owner_id=application_revision_id,
                 build_invocation_id=invocation.id,
                 artifact_type="materialized_source",
                 path=str(target),
@@ -416,17 +425,9 @@ class ActionRuntime:
                 node_ref("BuildArtifact", id=artifact.id),
             )
             self.store.create_edge(
-                node_ref(
-                    "ApplicationRevision",
-                    id=action_revision.application_revision_id,
-                ),
+                node_ref("ApplicationRevision", id=application_revision_id),
                 "HAS_BUILD_INVOCATION",
                 node_ref("BuildInvocation", id=invocation.id),
-            )
-            self.store.create_edge(
-                node_ref("ActionRevision", id=action_revision.id),
-                "MATERIALIZED_TO",
-                node_ref("BuildArtifact", id=artifact.id),
             )
             self.store.create_edge(
                 node_ref("BuildInvocation", id=invocation.id),
@@ -451,13 +452,13 @@ class ActionRuntime:
     ) -> dict[str, Any]:
         self.uow.require_inactive("wait for action subprocess")
         result_path = self.paths.root / "action-results" / f"{uuid.uuid4()}.json"
-        revision = self.graph.revisions[action_revision.application_revision_id]
         invocation_id = invocation_id or str(uuid.uuid4())
         execution_context = self.resolve_execution_context(
             action_revision,
             invocation_id,
             execution_context,
         )
+        revision = self.graph.revisions[execution_context.application_revision_id]
         secrets_path = (
             None
             if check_only or execution_context.mode == "development"

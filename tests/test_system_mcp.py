@@ -73,6 +73,8 @@ def test_system_mcp_declares_authoring_catalog() -> None:
         "inspect_experience",
         "inspect_source_changes",
     }.isdisjoint(names)
+    assert "discard_application_revision" in names
+    assert "discard_experience_revision" in names
 
 
 def test_system_mcp_can_author_application_source() -> None:
@@ -88,10 +90,15 @@ def test_system_mcp_can_author_application_source() -> None:
             "create_application_revision",
             {"application_id": app.structured_content["id"]},
         )
+        inspected = await mcp.call_tool("inspect_system", {})
+        assert inspected.structured_content["applications"][0]["id"] == "mail"
+        assert inspected.structured_content["applications"][0]["draft_revision_id"] == (
+            revision.structured_content["id"]
+        )
         written = await mcp.call_tool(
             "write_source_file",
             {
-                "source_tree_id": revision.structured_content["source_tree_id"],
+                "revision_id": revision.structured_content["id"],
                 "path": "actions/echo.py",
                 "content": "def run():\n    return {'ok': True}\n",
                 "role": "action",
@@ -100,12 +107,12 @@ def test_system_mcp_can_author_application_source() -> None:
         )
         listed = await mcp.call_tool(
             "list_source_tree",
-            {"source_tree_id": revision.structured_content["source_tree_id"]},
+            {"revision_id": revision.structured_content["id"]},
         )
         read = await mcp.call_tool(
             "read_source_file",
             {
-                "source_tree_id": revision.structured_content["source_tree_id"],
+                "revision_id": revision.structured_content["id"],
                 "path": "actions/echo.py",
             },
         )
@@ -132,7 +139,7 @@ def test_system_mcp_exposes_mcp_app_surface(tmp_path) -> None:
             "native-mcp", ui_profile="none"
         )
         runtime.source.write_source_file(
-            revision.source_tree_id,
+            revision.id,
             "src/main.ts",
             "ready",
             role="surface",
@@ -151,7 +158,9 @@ def test_system_mcp_exposes_mcp_app_surface(tmp_path) -> None:
         html = "<html><body>system-mcp-html</body></html>"
         html_path = tmp_path / "mcp-app.html"
         html_path.write_text(html, encoding="utf-8")
-        runtime.surfaces.build_input_hash = lambda _surface: "current"
+        runtime.surfaces.build_input_hash = (
+            lambda _revision_id, _surface: "current"
+        )
         with runtime.uow:
             runtime.graph.experience_revisions.save(
                 revision.model_copy(update={"status": "active"})

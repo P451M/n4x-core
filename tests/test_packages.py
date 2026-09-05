@@ -33,7 +33,7 @@ def _active_application(system: SystemRuntime, application_id: str = "portable")
         required=["title"],
     )
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/create.py",
         action_source(
             "def run(ctx, input):\n"
@@ -170,7 +170,6 @@ def test_package_import_collapses_repeated_definition_history_to_active_revision
     legacy = ObjectTypeRevision(
         id="evolved.Note@legacy",
         object_type_id=active.object_type_id,
-        application_revision_id=active.application_revision_id,
         name=active.name,
         properties={"legacy_title": {"type": "string"}},
         required=[],
@@ -201,9 +200,10 @@ def test_package_import_collapses_repeated_definition_history_to_active_revision
         len(
             [
                 item
-                for item in destination.graph.object_type_revisions.values()
-                if item.application_revision_id == imported.active_revision_id
-                and item.object_type_id == "evolved.Note"
+                for item in destination.source.bindings.object_type_revisions(
+                    imported.active_revision_id
+                )
+                if item.object_type_id == "evolved.Note"
             ]
         )
         == 1
@@ -247,7 +247,7 @@ def test_experience_package_v2_roundtrip_activates_surfaces(
         ],
     )
     source.source.write_source_file(
-        experience_revision.source_tree_id,
+        experience_revision.id,
         "src/main.ts",
         "document.body.textContent = 'portable';\n",
         role="surface",
@@ -319,7 +319,7 @@ def test_package_v2_explicitly_rejects_package_v1_archive() -> None:
         system.inspect_package("legacy-package.n4xp")
 
 
-def test_v5_imports_definition_only_v4_package_and_rejects_v4_data() -> None:
+def test_v6_rejects_v4_packages() -> None:
     paths = RuntimePaths.temporary()
     source = SystemRuntime(InMemoryGraphStore(), runtime_paths=paths)
     _active_application(source, "v4-definition")
@@ -333,13 +333,9 @@ def test_v5_imports_definition_only_v4_package_and_rejects_v4_data() -> None:
 
     destination = SystemRuntime(InMemoryGraphStore(), runtime_paths=paths)
     inspected = destination.inspect_package("v4-definition.n4xp")
-    installed = destination.import_package("v4-definition.n4xp")
-
-    assert inspected["compatible"] is True
-    assert installed["attempt"]["status"] == "succeeded"
-    assert destination.inspect_application("v4-definition").status == (
-        "triggers_paused"
-    )
+    assert inspected["compatible"] is False
+    with pytest.raises(ValidationFailure, match="package_incompatible"):
+        destination.import_package("v4-definition.n4xp")
 
     source.export_package(
         "application",
@@ -396,7 +392,7 @@ def test_outdated_package_inspects_and_imports_disabled() -> None:
     assert destination.inspect_application("outdated").status == "disabled"
 
     rewritten = destination.create_application_revision("outdated")
-    assert rewritten.parent_revision_id is not None
+    assert rewritten.parent_revision_id is None
     destination.activate_application_revision(rewritten.id)
     usable = destination.inspect_application("outdated")
     assert usable.status == "triggers_paused"

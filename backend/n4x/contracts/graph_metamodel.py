@@ -1,7 +1,7 @@
-GRAPH_METAMODEL_VERSION = "n4x.graph.metamodel.v5"
+GRAPH_METAMODEL_VERSION = "n4x.graph.metamodel.v6"
 GRAPH_METAMODEL_SCHEMA_FINGERPRINT = (
-    "sha256:9dc97f4767decc7d51021855c5650cbb"
-    "75f8751d7f9f79b279561e81ba07ae21"
+    "sha256:0f03b86e393e59cc7125a4546d4c713f"
+    "03f096e710dda0cf05099bb45cc3d1c2"
 )
 
 GRAPH_METAMODEL_SCHEMA = {
@@ -11,6 +11,5 @@ GRAPH_METAMODEL_SCHEMA = {
     "persistence": "neo4j",
     "compatibility": {
         "export_import": "n4x.package.v2",
-        "definition_only_predecessor": "n4x.graph.metamodel.v4",
     },
 }

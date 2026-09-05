@@ -32,7 +32,7 @@ def _author_delivery_app(
     app = system.create_application(application_id, "Generic Files")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/files.py",
         (
             "import os\n"
@@ -136,7 +136,7 @@ def test_development_file_delivery_is_bound_to_deployment_volume(
     app = system.create_application("dev-files", "Dev Files")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/write.py",
         (
             "import os\n"

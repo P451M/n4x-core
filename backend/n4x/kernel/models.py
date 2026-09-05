@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def now_utc() -> datetime:
@@ -15,9 +15,8 @@ DataSpaceKind = Literal["production", "development"]
 DevelopmentDeploymentStatus = Literal["active", "expired"]
 RevisionStatus = Literal["draft", "validating", "active", "rejected", "superseded"]
 UiProfile = Literal["n4x-default", "custom", "none"]
-SourceTreeStatus = Literal["draft", "immutable_snapshot"]
+SourceTreeStatus = Literal["draft", "interned"]
 SourceRole = Literal["action", "surface", "migration", "test", "helper", "config"]
-SourceOperation = Literal["add", "modify", "delete", "rename"]
 ActionKind = Literal["normal", "migration", "test_helper"]
 InvocationKind = Literal[
     "draft", "active", "callback", "migration", "migration_dry_run", "test"
@@ -85,7 +84,6 @@ class PlatformSystem(BaseModel):
 class SystemRevision(BaseModel):
     id: str
     system_id: str
-    source_tree_id: str
     content_root: str
     host_abi: str
     action_context: str
@@ -133,7 +131,6 @@ class DevelopmentDeployment(BaseModel):
 class ApplicationRevision(BaseModel):
     id: str
     application_id: str
-    source_tree_id: str
     parent_revision_id: str | None = None
     ui_profile: UiProfile = "n4x-default"
     status: RevisionStatus = "draft"
@@ -185,7 +182,6 @@ class Experience(BaseModel):
 class ExperienceRevision(BaseModel):
     id: str
     experience_id: str
-    source_tree_id: str
     parent_revision_id: str | None = None
     ui_profile: UiProfile = "n4x-default"
     status: RevisionStatus = "draft"
@@ -205,12 +201,13 @@ class ExperienceRevision(BaseModel):
 
 
 class ExperienceSurface(BaseModel):
-    experience_revision_id: str
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
     surface_id: str
     surface_type: str
     surface_type_version: int
     entrypoint: str
-    source_tree_id: str
     source_paths: list[str]
     title: str = ""
     description: str | None = None
@@ -219,11 +216,10 @@ class ExperienceSurface(BaseModel):
     created_by: str = "system"
 
     @field_validator(
-        "experience_revision_id",
+        "id",
         "surface_id",
         "surface_type",
         "entrypoint",
-        "source_tree_id",
     )
     @classmethod
     def validate_non_empty_fields(cls, value: str) -> str:
@@ -280,17 +276,21 @@ class BlueprintSurfaceDefinition(BaseModel):
 
     @model_validator(mode="after")
     def validate_surface(self) -> BlueprintSurfaceDefinition:
+        from n4x.kernel.intern import experience_surface_id
+
+        payload = {
+            "surface_id": self.id,
+            "surface_type": self.surface_type,
+            "surface_type_version": self.surface_type_version,
+            "entrypoint": self.entrypoint,
+            "source_paths": self.source_paths,
+            "title": self.title,
+            "description": self.description,
+            "config": self.config,
+        }
         ExperienceSurface(
-            experience_revision_id="blueprint-validation",
-            surface_id=self.id,
-            surface_type=self.surface_type,
-            surface_type_version=self.surface_type_version,
-            entrypoint=self.entrypoint,
-            source_tree_id="blueprint-validation.source",
-            source_paths=self.source_paths,
-            title=self.title,
-            description=self.description,
-            config=self.config,
+            id=experience_surface_id(payload),
+            **payload,
         )
         return self
 
@@ -390,29 +390,18 @@ class BlueprintRevision(BaseModel):
 
 class SourceTree(BaseModel):
     id: str
-    owner_kind: RevisionOwnerKind
-    owner_id: str
-    draft_or_revision_id: str
     status: SourceTreeStatus
-    root_namespace: str
     tree_hash: str
-    derived_from_tree_id: str | None = None
+    owner_kind: RevisionOwnerKind | None = None
+    owner_id: str | None = None
     created_at: datetime = Field(default_factory=now_utc)
     updated_at: datetime = Field(default_factory=now_utc)
 
-    @model_validator(mode="before")
-    @classmethod
-    def accept_legacy_application_owner(cls, value: Any) -> Any:
-        return _canonicalize_revision_owner(
-            value,
-            legacy_field="application_id",
-            owner_id_field="draft_or_revision_id",
-        )
 
-    @property
-    def application_id(self) -> str:
-        """Legacy runtime compatibility; canonical persistence uses owner_kind/id."""
-        return self.root_namespace
+class SourceContent(BaseModel):
+    id: str
+    content: str
+    created_at: datetime = Field(default_factory=now_utc)
 
 
 class SourceFile(BaseModel):
@@ -423,9 +412,6 @@ class SourceFile(BaseModel):
     content: str
     content_hash: str
     size: int
-    version: int = 1
-    created_at: datetime = Field(default_factory=now_utc)
-    updated_at: datetime = Field(default_factory=now_utc)
 
 
 class SourceFileSummary(BaseModel):
@@ -435,27 +421,10 @@ class SourceFileSummary(BaseModel):
     language: str
     content_hash: str
     size: int
-    version: int
-    created_at: datetime
-    updated_at: datetime
 
     @classmethod
     def from_source_file(cls, source_file: SourceFile) -> SourceFileSummary:
         return cls.model_validate(source_file.model_dump(exclude={"content"}))
-
-
-class SourceChange(BaseModel):
-    id: str
-    source_tree_id: str
-    change_group_id: str
-    operation: SourceOperation
-    path: str
-    old_path: str | None = None
-    old_hash: str | None = None
-    new_hash: str | None = None
-    actor: str = "system"
-    tool: str = "kernel"
-    timestamp: datetime = Field(default_factory=now_utc)
 
 
 class ApplicationObject(BaseModel):
@@ -495,7 +464,6 @@ class ObjectType(BaseModel):
 class ObjectTypeRevision(BaseModel):
     id: str
     object_type_id: str
-    application_revision_id: str
     name: str
     properties: dict[str, Any] = Field(default_factory=dict)
     required: list[str] = Field(default_factory=list)
@@ -513,7 +481,6 @@ class RelationType(BaseModel):
 class RelationTypeRevision(BaseModel):
     id: str
     relation_type_id: str
-    application_revision_id: str
     name: str
     from_object_type_id: str
     to_object_type_id: str
@@ -558,21 +525,10 @@ class CallbackRoute(BaseModel):
 
 class RuntimeDependency(BaseModel):
     id: str
-    owner_kind: RevisionOwnerKind
-    owner_id: str
     ecosystem: Literal["python", "javascript"]
     package: str
     spec: str
     created_at: datetime = Field(default_factory=now_utc)
-
-    @model_validator(mode="before")
-    @classmethod
-    def accept_legacy_application_owner(cls, value: Any) -> Any:
-        return _canonicalize_revision_owner(value)
-
-    @property
-    def application_revision_id(self) -> str:
-        return self.owner_id
 
 
 class PythonEnvironment(BaseModel):
@@ -601,15 +557,6 @@ class JavaScriptEnvironment(BaseModel):
     last_resolved_at: datetime | None = None
     error: str | None = None
 
-    @model_validator(mode="before")
-    @classmethod
-    def accept_legacy_application_owner(cls, value: Any) -> Any:
-        return _canonicalize_revision_owner(value)
-
-    @property
-    def application_revision_id(self) -> str:
-        return self.owner_id
-
 
 class BuildInvocation(BaseModel):
     id: str
@@ -625,15 +572,6 @@ class BuildInvocation(BaseModel):
     error: str | None = None
     started_at: datetime = Field(default_factory=now_utc)
     completed_at: datetime | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def accept_legacy_application_owner(cls, value: Any) -> Any:
-        return _canonicalize_revision_owner(value)
-
-    @property
-    def application_revision_id(self) -> str:
-        return self.owner_id
 
 
 class BuildArtifact(BaseModel):
@@ -656,15 +594,6 @@ class BuildArtifact(BaseModel):
     manifest: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=now_utc)
-
-    @model_validator(mode="before")
-    @classmethod
-    def accept_legacy_application_owner(cls, value: Any) -> Any:
-        return _canonicalize_revision_owner(value)
-
-    @property
-    def application_revision_id(self) -> str:
-        return self.owner_id
 
     @model_validator(mode="after")
     def validate_surface_authority(self) -> BuildArtifact:
@@ -702,9 +631,8 @@ class Trigger(BaseModel):
 class TriggerRevision(BaseModel):
     id: str
     trigger_id: str
-    application_revision_id: str
+    action_id: str
     trigger_type: TriggerType
-    action_revision_id: str
     config: dict[str, Any] = Field(default_factory=dict)
     input_template: dict[str, Any] = Field(default_factory=dict)
     overlap_policy: TriggerOverlapPolicy = "run_concurrently"
@@ -720,10 +648,8 @@ class TriggerRevision(BaseModel):
 class ActionRevision(BaseModel):
     id: str
     action_id: str
-    application_revision_id: str
     kind: ActionKind
     entrypoint: str
-    source_tree_id: str
     source_paths: list[str]
     input_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema: dict[str, Any] = Field(default_factory=dict)
@@ -764,6 +690,7 @@ class Invocation(BaseModel):
 class JobRecord(BaseModel):
     id: str
     application_id: str
+    application_revision_id: str
     trigger_revision_id: str
     action_revision_id: str
     status: JobStatus
@@ -819,8 +746,7 @@ class CypherAuditRecord(BaseModel):
 
 class TestCase(BaseModel):
     id: str
-    application_revision_id: str
-    action_revision_id: str
+    action_id: str
     input: dict[str, Any]
     expected_output: Any
 
@@ -891,45 +817,6 @@ class PackageImportAttempt(BaseModel):
     error: str | None = None
     started_at: datetime = Field(default_factory=now_utc)
     completed_at: datetime | None = None
-
-
-def _canonicalize_legacy_field(value: Any, *, canonical: str, legacy: str) -> Any:
-    if not isinstance(value, dict):
-        return value
-    values = dict(value)
-    legacy_value = values.pop(legacy, None)
-    if canonical not in values and legacy_value is not None:
-        values[canonical] = legacy_value
-    elif legacy_value is not None and values.get(canonical) != legacy_value:
-        raise ValueError(f"{canonical} conflicts with legacy {legacy}")
-    return values
-
-
-def _canonicalize_revision_owner(
-    value: Any,
-    *,
-    legacy_field: str = "application_revision_id",
-    owner_id_field: str | None = None,
-) -> Any:
-    if not isinstance(value, dict):
-        return value
-    values = dict(value)
-    legacy_value = values.pop(legacy_field, None)
-    inferred_owner_id = (
-        values.get(owner_id_field) if owner_id_field is not None else legacy_value
-    )
-    if "owner_kind" not in values and inferred_owner_id is not None:
-        values["owner_kind"] = "ApplicationRevision"
-    if "owner_id" not in values and inferred_owner_id is not None:
-        values["owner_id"] = inferred_owner_id
-    if (
-        legacy_value is not None
-        and owner_id_field is None
-        and values.get("owner_kind") == "ApplicationRevision"
-        and values.get("owner_id") != legacy_value
-    ):
-        raise ValueError(f"owner_id conflicts with legacy {legacy_field}")
-    return values
 
 
 def _validate_relative_source_path(path: str) -> None:

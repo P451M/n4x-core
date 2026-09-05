@@ -29,7 +29,7 @@ def test_actions_can_create_list_and_delete_application_relations() -> None:
     )
     physical = relation_type.physical_type
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/projects.py",
         action_source(
             "def create_project_task(ctx, input):\n"
@@ -64,7 +64,7 @@ def test_actions_can_create_list_and_delete_application_relations() -> None:
     )
 
     created = system.run_draft_action(
-        create_action.id, {"project": "Launch", "task": "Ship"}
+        revision.id, create_action.action_id, {"project": "Launch", "task": "Ship"}
     )
     relations = system.list_application_relations(
         app.id, relation_type.relation_type_id
@@ -77,7 +77,7 @@ def test_actions_can_create_list_and_delete_application_relations() -> None:
     assert relations[0].values == {"rank": 1}
 
     deleted = system.run_draft_action(
-        delete_action.id, {"task_id": created.output["task_id"]}
+        revision.id, delete_action.action_id, {"task_id": created.output["task_id"]}
     )
 
     assert deleted.status == "succeeded", deleted.error
@@ -98,7 +98,7 @@ def test_app_relations_preserve_multiple_edges_between_same_objects() -> None:
         to_object_type_id=right_type.object_type_id,
     )
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/create_pair.py",
         action_source(
             "def run(ctx, input):\n"
@@ -116,7 +116,7 @@ def test_app_relations_preserve_multiple_edges_between_same_objects() -> None:
         entrypoint="actions/create_pair.py:run",
         source_paths=["actions/create_pair.py"],
     )
-    created = system.run_draft_action(action.id, {})
+    created = system.run_draft_action(revision.id, action.action_id, {})
     assert created.status == "succeeded", created.error
 
     first = system.create_application_relation(

@@ -72,9 +72,10 @@ with explicit user intent.
 Host-control tools (`inspect_official_release`, `import_official_system`,
 `enable_system_revision`, `dump_instance`, `inspect_instance_dumps`) talk to
 the Host, not the graph authoring catalog. Import writes a SystemRevision
-and does not enable it. Enable rematerializes current SourceFiles and
-restarts the worker. `inspect_system` returns the enabled revision and its
-`source_tree_id`. Heal System source with `write_source_file`, then enable
+and does not enable it. Enable rematerializes current source from the enabled
+revision's tree and restarts the worker. `inspect_system` returns the enabled
+revision, Applications, and Experiences, each with a derived `source_tree_id`.
+Heal System source with `write_source_file` on that `revision_id`, then enable
 the same revision. `reset_dev_graph` wipes a dedicated development database
 after exact name confirmation.
 

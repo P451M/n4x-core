@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Protocol
 
+from n4x.graph.bindings import RevisionBindings
 from n4x.graph.service_base import transactional
 from n4x.graph.store import node_ref
 from n4x.graph.uow import GraphUnitOfWork
@@ -22,13 +23,13 @@ from n4x.system.surface_notifications import SurfaceCatalogNotifier
 
 
 class ExperienceActivationSourcePort(Protocol):
-    def snapshot_tree(self, source_tree_id: str, revision_id: str): ...
+    def intern_tree(self, revision_id: str): ...
 
     def read_source_file(self, source_tree_id: str, path: str): ...
 
 
 class ExperienceSurfaceRuntimePort(Protocol):
-    def build(self, surface: ExperienceSurface): ...
+    def build(self, experience_revision_id: str, surface: ExperienceSurface): ...
 
 
 class ExperienceActivationService:
@@ -47,6 +48,7 @@ class ExperienceActivationService:
         self.source = source
         self.surface_runtime = surface_runtime
         self.surface_notifier = surface_notifier
+        self.bindings = RevisionBindings(uow)
 
     @transactional
     def validate(
@@ -92,37 +94,41 @@ class ExperienceActivationService:
                         if stable is None or stable.active_revision_id is None
                         else revision_collection.get(stable.active_revision_id)
                     )
+                    bound = False
+                    if (
+                        application.active_revision_id is not None
+                        and active is not None
+                    ):
+                        bound = any(
+                            item.id == active.id
+                            for item in {
+                                "object type": self.bindings.object_type_revisions,
+                                "relation type": self.bindings.relation_type_revisions,
+                                "action": self.bindings.action_revisions,
+                            }[label](application.active_revision_id)
+                        )
                     if (
                         stable is None
                         or stable.application_id != application.id
                         or active is None
-                        or active.application_revision_id
-                        != application.active_revision_id
+                        or not bound
                     ):
                         errors.append(
                             f"{identifier}: {label} is not active in "
                             f"Application {application.id}"
                         )
 
-        for dependency in self.records.runtime_dependencies.values():
-            if dependency.owner_id != revision.id:
-                continue
-            if (
-                dependency.owner_kind != "ExperienceRevision"
-                or dependency.ecosystem != "javascript"
-            ):
+        for dependency in self.bindings.dependencies(revision.id):
+            if dependency.ecosystem != "javascript":
                 errors.append(
                     f"{dependency.id}: invalid Experience dependency ownership"
                 )
 
+        tree_id = self.bindings.tree_id(revision.id)
         for surface in self._surfaces(revision.id):
-            if surface.source_tree_id != revision.source_tree_id:
-                errors.append(
-                    f"{surface.surface_id}: invalid Experience Surface source ownership"
-                )
             for path in surface.source_paths:
                 try:
-                    self.source.read_source_file(surface.source_tree_id, path)
+                    self.source.read_source_file(tree_id, path)
                 except Exception as exc:  # noqa: BLE001
                     errors.append(
                         f"{surface.surface_id}:{path}: "
@@ -188,39 +194,11 @@ class ExperienceActivationService:
         if revision.status == "draft":
             revision = revision.model_copy(update={"status": "validating"})
             self.records.experience_revisions.save(revision)
-        tree = self.records.source_trees[revision.source_tree_id]
-        if tree.status == "immutable_snapshot":
-            snapshot = tree
-        else:
-            snapshot = self.source.snapshot_tree(
-                revision.source_tree_id, revision.id
-            )
-            revision = revision.model_copy(update={"source_tree_id": snapshot.id})
-            self.records.experience_revisions.save(revision)
-            self.store.replace_single_edge(
-                node_ref("ExperienceRevision", id=revision.id),
-                "HAS_SOURCE_TREE",
-                node_ref("SourceTree", id=snapshot.id),
-            )
-        for current in self._surfaces(revision.id):
-            updated = current.model_copy(update={"source_tree_id": snapshot.id})
-            self.records.experience_surfaces.save(updated)
-            surface_ref = node_ref(
-                "ExperienceSurface",
-                experience_revision_id=updated.experience_revision_id,
-                surface_id=updated.surface_id,
-            )
-            self.store.delete_edge(surface_ref, "USES_SOURCE")
-            for path in updated.source_paths:
-                self.store.create_edge(
-                    surface_ref,
-                    "USES_SOURCE",
-                    node_ref("SourceFile", source_tree_id=snapshot.id, path=path),
-                )
+        self.source.intern_tree(revision.id)
 
     def _build(self, experience_revision_id: str) -> None:
         for surface in self._surfaces(experience_revision_id):
-            result = self.surface_runtime.build(surface)
+            result = self.surface_runtime.build(experience_revision_id, surface)
             self._require_pwa_manifest(surface, result.artifact)
 
     def _activate_edges(
@@ -301,10 +279,6 @@ class ExperienceActivationService:
 
     def _surfaces(self, experience_revision_id: str) -> list[ExperienceSurface]:
         return sorted(
-            (
-                item
-                for item in self.records.experience_surfaces.values()
-                if item.experience_revision_id == experience_revision_id
-            ),
+            self.bindings.surfaces(experience_revision_id),
             key=lambda item: item.surface_id,
         )

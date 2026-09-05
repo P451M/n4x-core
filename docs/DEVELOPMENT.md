@@ -21,7 +21,7 @@ The V1 engine architecture is implemented. Product serving is Host plus one Syst
 - React/TypeScript Experience Surfaces use host-appropriate browser or MCP Apps bridges and immutable build artifacts.
 - Surface builds are explicit or activation-driven. Hosts return a missing-artifact error instead of building on first request.
 - Generic MCP authoring reconstructs applications; there are no app-specific Host or System seeders.
-- System enable rematerializes current SourceFiles and stop-then-starts the worker. Neo4j stays in place. Package export then wipe is a development reset, not a System update.
+- System enable rematerializes current source from the enabled revision's tree and stop-then-starts the worker. Neo4j stays in place. Package export then wipe is a development reset, not a System update.
 
 Notes, Mail, and Calendar are independent backend Applications presented by
 graph-owned Office Experience Surfaces:
@@ -30,10 +30,9 @@ graph-owned Office Experience Surfaces:
 - Mail: account setup, inbox/detail, refresh, and compose/send.
 - Calendar: calendar/list/detail views and event create/update/delete.
 
-N4X V1 applications remain on `n4x.graph.metamodel.v5`. A fresh graph is stamped
+N4X V1 applications remain on `n4x.graph.metamodel.v6`. A fresh graph is stamped
 that version; an older or non-empty unversioned graph is rejected and requires
-an explicit guarded reset. There is no automatic predecessor-graph migration,
-Widget compatibility reader, or legacy Surface host alias.
+an explicit guarded reset. There is no automatic predecessor-graph migration.
 
 ## Architecture
 
@@ -53,10 +52,10 @@ Callbacks use `GET|POST /callback/{route_id}` and the generic MCP callback tools
 - `n4x.action.subprocess.v3` — one child-interpreter RPC loop; spawn env is stable (data root, Cypher gateway, application/space ids); each invoke is a stdin JSON line and a result file; children may be reused for the same ApplicationRevision and DataSpace
 - `n4x.file.delivery.v1` — allowlisted Actions may authorize confined, short-lived Experience URLs for app-owned files without a Host/System Blob/File model
 - `n4x.experience.bridge.v1` — browser Surfaces use Experience-scoped HTTP capabilities; MCP App Surfaces use standard postMessage `tools/call` with `window.openai.callTool` only as a compatibility fallback
-- `n4x.mcp.authoring.v8` — stable Application, Experience, and Surface payloads; `inspect_client_guide` is the client-usage playbook; context-addressed source patches, ranged reads, and source-tree search; authoring inspect is bounded
+- `n4x.mcp.authoring.v9` — interned revision graph; source writes take `revision_id`; `inspect_system` lists Applications and Experiences; draft run uses `(application_revision_id, action_id)`; discard tools for unused drafts
 - `n4x.callback.v1`
 - `n4x.package.v2` — deterministic active-working-set archives with canonical Surface declarations and optional Application data; package-v1 archives are rejected
-- `n4x.graph.metamodel.v5`
+- `n4x.graph.metamodel.v6`
 - platform authoring seed `n4x.platform-authoring-seed.v1`, UI release `n4x-ui-v8`
 - checkpoint snapshot format `1`
 
@@ -224,7 +223,7 @@ development database and reset it explicitly:
 reset_dev_graph  (MCP; confirmation_database = the dedicated development database)
 ```
 
-This deletes every node, recreates the schema/root, and stamps v5. Back up
+This deletes every node, recreates the schema/root, and stamps v6. Back up
 anything needed before running it; older prototype graphs are not migrated.
 This is a development reset. Ordinary System updates do not wipe the database.
 

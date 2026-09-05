@@ -4,7 +4,7 @@
 
 2. Respect the revision's `ui_profile`. For `n4x-default`, build Experience-owned shadcn/ui components with Tailwind and map their utilities to the active N4X theme tokens. For `custom`, the user-selected design system takes precedence and must not be mixed with the N4X default profile unless the user explicitly requests it. For `none`, the Experience owns its complete visual implementation and the N4X theme and palette are optional.
 
-3. Inspect existing graph SourceFiles before adding UI. Reuse an established component foundation, shell, utilities, and conventions. For a new `n4x-default` Experience, establish the reusable component foundation before broad feature work. Semantic classes such as `bg-card` and `text-muted-foreground` apply theme colors but do not by themselves constitute shadcn/ui composition.
+3. Inspect existing source files before adding UI. Reuse an established component foundation, shell, utilities, and conventions. For a new `n4x-default` Experience, establish the reusable component foundation before broad feature work. Semantic classes such as `bg-card` and `text-muted-foreground` apply theme colors but do not by themselves constitute shadcn/ui composition.
 
 4. For standalone `n4x-default` application chrome, use shadcn/ui `Sidebar` with `variant="inset"` and compose the main surface inside `SidebarInset`. Use the selected component system for buttons, fields, dialogs, sheets, command interfaces, tabs, menus, and other recurring controls instead of accumulating one-off lookalike primitives. This is composition guidance, not a deterministic source restriction.
 

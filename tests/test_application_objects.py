@@ -15,7 +15,7 @@ def test_actions_can_create_and_read_application_objects() -> None:
         properties={"title": {"type": "string"}, "body": {"type": "string"}},
     )
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/notes.py",
         action_source(
             "def create_note(ctx, input):\n"
@@ -45,9 +45,9 @@ def test_actions_can_create_and_read_application_objects() -> None:
     )
 
     create_invocation = system.run_draft_action(
-        create_action.id, {"title": "First", "body": "Hello"}
+        revision.id, create_action.action_id, {"title": "First", "body": "Hello"}
     )
-    list_invocation = system.run_draft_action(list_action.id, {})
+    list_invocation = system.run_draft_action(revision.id, list_action.action_id, {})
 
     assert create_invocation.status == "succeeded", create_invocation.error
     assert len(system.uow.records.objects) == 1
@@ -69,7 +69,7 @@ def test_action_operations_commit_or_roll_back_in_app_transaction() -> None:
     revision = system.create_application_revision(app.id)
     system.create_object_type(revision.id, "staged.Item", name="Item")
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/staged.py",
         action_source(
             "def create_update(ctx, input):\n"
@@ -111,10 +111,10 @@ def test_action_operations_commit_or_roll_back_in_app_transaction() -> None:
         source_paths=["actions/staged.py"],
     )
 
-    updated = system.run_draft_action(create_update.id, {})
-    deleted = system.run_draft_action(create_delete.id, {})
+    updated = system.run_draft_action(revision.id, create_update.action_id, {})
+    deleted = system.run_draft_action(revision.id, create_delete.action_id, {})
     before_invalid = set(system.uow.records.objects)
-    invalid = system.run_draft_action(invalid_update.id, {})
+    invalid = system.run_draft_action(revision.id, invalid_update.action_id, {})
 
     assert updated.status == "succeeded", updated.error
     assert updated.output["values"] == {"value": 2}

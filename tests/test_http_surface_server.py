@@ -62,7 +62,7 @@ def test_http_runtime_exposes_surface_palette_and_theme() -> None:
     assert contract.json()["access"]["empty_allowlist"] == "denied"
     assert contract.json()["callback_contract_version"] == "n4x.callback.v1"
     assert contract.json()["callback"]["http"]["path"] == "/callback/{route_id}"
-    assert contract.json()["graph_metamodel_version"] == "n4x.graph.metamodel.v5"
+    assert contract.json()["graph_metamodel_version"] == "n4x.graph.metamodel.v6"
 
 
 def test_http_runtime_bridge_lists_objects_and_invokes_active_action() -> None:
@@ -81,7 +81,7 @@ def test_http_runtime_bridge_lists_objects_and_invokes_active_action() -> None:
         to_object_type_id=notebook_type.object_type_id,
     )
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/notes.py",
         action_source(
             "def create_note(ctx, input):\n"
@@ -131,7 +131,7 @@ def test_experience_bridge_enforces_access_and_records_provenance() -> None:
     system.create_object_type(app_revision.id, "bridge.Visible", name="Visible")
     system.create_object_type(app_revision.id, "bridge.Hidden", name="Hidden")
     system.source.write_source_file(
-        app_revision.source_tree_id,
+        app_revision.id,
         "actions/create.py",
         action_source(
             "def create(ctx, input):\n"
@@ -230,7 +230,7 @@ def test_experience_secret_bridge_is_explicit_and_never_persists_values() -> Non
         app.id, "secret://secret-bridge/password"
     )
     system.source.write_source_file(
-        app_revision.source_tree_id,
+        app_revision.id,
         "actions/read.py",
         (
             "def run(ctx, input):\n"

@@ -10,7 +10,6 @@ from n4x.graph.store import GraphStore, Neo4jGraphStore, node_ref
 from n4x.kernel.models import (
     ApplicationObject,
     ApplicationRelation,
-    ExperienceSurface,
     Invocation,
     SourceTree,
 )
@@ -100,7 +99,7 @@ def test_fresh_composition_repairs_durable_damage(
         activate=True,
     )
     source = first.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/run.py",
         "def run(ctx, input):\n    return {'ok': True}\n",
         role="action",
@@ -154,10 +153,6 @@ def test_fresh_composition_repairs_durable_damage(
         node_ref("AppBlueprint", id=blueprint.id),
     )
     integrity_store.delete_edge(
-        node_ref("SourceTree", id=revision.source_tree_id),
-        "HAS_FILE",
-    )
-    integrity_store.delete_edge(
         node_ref("ActionRevision", id=action.id),
         "DEPENDS_ON",
     )
@@ -173,7 +168,6 @@ def test_fresh_composition_repairs_durable_damage(
     restarted = _kernel(integrity_store)
 
     assert damaged["ok"] is False
-    assert any("HAS_FILE" in error for error in damaged["errors"])
     assert any("DEPENDS_ON" in error for error in damaged["errors"])
     assert any("HAS_INVOCATION" in error for error in damaged["errors"])
     assert any("RAN" in error for error in damaged["errors"])
@@ -237,36 +231,30 @@ def test_integrity_rejects_invalid_physical_relation_endpoints(
     assert any("endpoint type mismatch" in error for error in report["errors"])
 
 
-def test_reachability_has_no_arbitrary_depth_limit(
+def test_interned_orphans_are_warnings_not_failures(
     integrity_store: GraphStore,
 ) -> None:
     prefix = f"deep-integrity-{uuid.uuid4()}"
     system = _kernel(integrity_store)
-    app = system.create_application(prefix, "Deep")
-    revision = system.create_application_revision(app.id)
-    current = system.uow.records.source_trees[revision.source_tree_id]
-    previous_id: str | None = None
+    system.create_application(prefix, "Deep")
     trees: list[SourceTree] = []
-    for index in reversed(range(10)):
-        tree = SourceTree(
-            id=f"{prefix}.tree.{index}",
-            application_id=app.id,
-            draft_or_revision_id=revision.id,
-            status="draft",
-            root_namespace=app.id,
-            tree_hash=f"hash-{index}",
-            derived_from_tree_id=previous_id,
+    for index in range(10):
+        trees.append(
+            SourceTree(
+                id=f"sha256:{prefix}-{index:02d}",
+                status="interned",
+                tree_hash=f"sha256:{prefix}-{index:02d}",
+            )
         )
-        trees.append(tree)
-        previous_id = tree.id
-    current = current.model_copy(update={"derived_from_tree_id": previous_id})
     with system.uow:
         for tree in trees:
             system.uow.records.source_trees.save(tree)
-        system.uow.records.source_trees.save(current)
 
+    report = system.validate_graph_shape()
     repaired = system.repair_graph_edges()
 
+    assert report["ok"] is True
+    assert any("unreachable node" in warning for warning in report["warnings"])
     assert repaired["ok"] is True, repaired["errors"]
 
 
@@ -305,55 +293,27 @@ def test_integrity_repairs_platform_theme_ownership_and_revision_edges(
     assert integrity_store.list_edges(guide, "ACTIVE_REVISION", guide_revision)
 
 
-def test_surface_integrity_repairs_direct_ownership_and_source_edges() -> None:
+def test_surface_integrity_rejects_revision_edges() -> None:
     store = InMemoryGraphStore()
     system = _kernel(store)
     experience = system.create_experience("surface-integrity", "Surface integrity")
     revision = system.create_experience_revision(experience.id, ui_profile="none")
-    source = system.source.write_source_file(
-        revision.source_tree_id,
+    system.source.write_source_file(
+        revision.id,
         "surfaces/main.tsx",
         "document.body.textContent = 'surface';\n",
         role="surface",
         language="typescript",
     )
-    surface = ExperienceSurface(
-        experience_revision_id=revision.id,
-        surface_id="main",
+    surface = system.create_experience_surface(
+        revision.id,
+        "main",
         surface_type="browser",
-        surface_type_version=1,
-        entrypoint=source.path,
-        source_tree_id=revision.source_tree_id,
-        source_paths=[source.path],
+        entrypoint="surfaces/main.tsx",
+        source_paths=["surfaces/main.tsx"],
         config={"mount_path": "/"},
     )
-    system.graph.experience_surfaces.save(surface)
-
-    damaged = system.validate_graph_shape()
-    repaired = system.repair_graph_edges()
-    surface_ref = node_ref(
-        "ExperienceSurface",
-        experience_revision_id=revision.id,
-        surface_id=surface.surface_id,
-    )
-
-    assert damaged["ok"] is False
-    assert repaired["ok"] is True, repaired["errors"]
-    assert store.list_edges(
-        node_ref("ExperienceRevision", id=revision.id),
-        "DECLARES_SURFACE",
-        surface_ref,
-    )
-    assert store.list_edges(
-        surface_ref,
-        "USES_SOURCE",
-        node_ref(
-            "SourceFile",
-            source_tree_id=revision.source_tree_id,
-            path=source.path,
-        ),
-    )
-
+    surface_ref = node_ref("ExperienceSurface", id=surface.id)
     store.create_edge(surface_ref, "ACTIVE_REVISION", surface_ref)
     invalid = system.validate_graph_shape()
     assert invalid["ok"] is False
@@ -388,7 +348,7 @@ def test_reset_and_bootstrap_are_idempotent() -> None:
 
     assert system.integrity.validate_graph_shape().ok
     assert root is not None
-    assert root["graph_metamodel_version"] == "n4x.graph.metamodel.v5"
+    assert root["graph_metamodel_version"] == "n4x.graph.metamodel.v6"
     assert first_release == second_release
     assert len(integrity_store.list_nodes("UiTheme")) == 1
     assert len(integrity_store.list_nodes("AuthoringGuide")) == 1

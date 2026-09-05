@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from collections.abc import Iterator
@@ -162,19 +163,36 @@ class InMemoryGraphStore:
         to_ref: NodeRef,
         props: dict[str, Any] | None = None,
     ) -> None:
+        values = deepcopy(props or {})
+        if edge_type == "HAS_FILE":
+            existing = next(
+                (
+                    edge
+                    for edge in self.edges
+                    if edge.from_ref == from_ref
+                    and edge.type == edge_type
+                    and edge.props.get("path") == values.get("path")
+                ),
+                None,
+            )
+            if existing is None:
+                self.edges.append(EdgeRecord(from_ref, edge_type, to_ref, values))
+            else:
+                existing.to_ref = to_ref
+                existing.props.update(values)
+            return
         existing = self._find_edge(from_ref, edge_type, to_ref)
         if existing is None:
-            self.edges.append(
-                EdgeRecord(from_ref, edge_type, to_ref, deepcopy(props or {}))
-            )
+            self.edges.append(EdgeRecord(from_ref, edge_type, to_ref, values))
         else:
-            existing.props.update(deepcopy(props or {}))
+            existing.props.update(values)
 
     def delete_edge(
         self,
         from_ref: NodeRef,
         edge_type: str,
         to_ref: NodeRef | None = None,
+        props: dict[str, Any] | None = None,
     ) -> None:
         self.edges = [
             edge
@@ -183,6 +201,10 @@ class InMemoryGraphStore:
                 edge.from_ref == from_ref
                 and edge.type == edge_type
                 and (to_ref is None or edge.to_ref == to_ref)
+                and (
+                    props is None
+                    or all(edge.props.get(key) == value for key, value in props.items())
+                )
             )
         ]
 
@@ -383,6 +405,7 @@ class InMemoryGraphStore:
             )
         )
         if writes and node_id:
+            _reject_non_neo4j_property_params(params)
             existing = self.get_node(label, {"id": node_id}) or {"id": node_id}
             existing.update(params)
             self.upsert_node(label, {"id": node_id}, existing)
@@ -425,6 +448,7 @@ class InMemoryGraphStore:
                     )
             return []
         if writes and {"application_id", "data_space_id", "id"} <= identity.keys():
+            _reject_non_neo4j_property_params(params)
             existing = self.get_node("ApplicationObject", identity) or {}
             existing.update(identity)
             if "object_type_id" in params:
@@ -497,6 +521,7 @@ class InMemoryGraphStore:
                 raise NotImplementedError(
                     f"test memory adapter needs relation endpoints: {compact}"
                 )
+            _reject_non_neo4j_property_params(params)
             relation = ApplicationRelation(
                 id=relation_id or str(uuid.uuid4()),
                 application_id=application_id,
@@ -509,7 +534,7 @@ class InMemoryGraphStore:
                 physical_type=physical_type,
                 from_object_id=from_id,
                 to_object_id=to_id,
-                values=dict(params.get("values") or {}),
+                values=_relation_values(params.get("values")),
             )
             self.create_app_relation(relation)
             return [
@@ -576,6 +601,39 @@ class InMemoryGraphStore:
             ),
             None,
         )
+
+
+def _reject_non_neo4j_property(value: Any, name: str) -> None:
+    if isinstance(value, dict):
+        raise TypeError(
+            "Property values can only be of primitive types or arrays thereof. "
+            f"Encountered: Map for {name}."
+        )
+    if isinstance(value, list) and any(
+        isinstance(item, dict | list) for item in value
+    ):
+        raise TypeError(
+            "Property values can only be of primitive types or arrays thereof. "
+            f"Encountered: nested list for {name}."
+        )
+
+
+def _reject_non_neo4j_property_params(params: dict[str, Any]) -> None:
+    for key, value in params.items():
+        _reject_non_neo4j_property(value, key)
+
+
+def _relation_values(raw: Any) -> dict[str, Any]:
+    if raw is None:
+        return {}
+    _reject_non_neo4j_property(raw, "values")
+    if isinstance(raw, str):
+        try:
+            loaded = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+    return {}
 
 
 def _project_cypher_return(

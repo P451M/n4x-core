@@ -26,7 +26,6 @@ async def _assert_notes_app_can_be_authored_through_mcp_tools() -> None:
     revision = await server.call_tool(
         "create_application_revision", {"application_id": app.structured_content["id"]}
     )
-    source_tree_id = revision.structured_content["source_tree_id"]
     revision_id = revision.structured_content["id"]
 
     notebook_type = await server.call_tool(
@@ -64,7 +63,7 @@ async def _assert_notes_app_can_be_authored_through_mcp_tools() -> None:
     await server.call_tool(
         "write_source_file",
         {
-            "source_tree_id": source_tree_id,
+            "revision_id": revision_id,
             "path": "actions/notes.py",
             "role": "action",
             "language": "python",
@@ -109,7 +108,8 @@ async def _assert_notes_app_can_be_authored_through_mcp_tools() -> None:
     invocation = await server.call_tool(
         "run_draft_action",
         {
-            "action_revision_id": create_action.structured_content["id"],
+            "application_revision_id": revision_id,
+            "action_id": create_action.structured_content["action_id"],
             "input_value": {"title": "First", "body": "Hello", "notebook": "Inbox"},
         },
     )

@@ -116,7 +116,7 @@ async def _assert_mcp_client_guide_is_the_authoring_playbook() -> None:
     )
     content = experience.structured_content["content"]
     assert "inspect_experience_design_context" in content
-    assert "Graph SourceFiles are the source of truth" in content
+    assert "Graph source is the source of truth" in content
     assert "Capture and inspect screenshots" in content
     assert "--primary:" not in content
     assert "github.com/jnsahaj/tweakcn" not in content
@@ -197,6 +197,8 @@ async def _assert_mcp_authoring_tools_are_registered_and_callable() -> None:
         "create_experience",
         "retire_experience",
         "create_experience_revision",
+        "discard_application_revision",
+        "discard_experience_revision",
         "set_experience_application_access",
         "inspect_experience_revision",
         "write_source_file",
@@ -325,7 +327,7 @@ async def _assert_mcp_can_author_canonical_experience() -> None:
     written = await server.call_tool(
         "write_source_file",
         {
-            "source_tree_id": revision.structured_content["source_tree_id"],
+            "revision_id": revision.structured_content["id"],
             "path": "src/main.ts",
             "content": "document.body.textContent = 'MCP';\n",
             "role": "surface",
@@ -358,7 +360,7 @@ async def _assert_mcp_can_author_canonical_experience() -> None:
     read = await server.call_tool(
         "read_source_file",
         {
-            "source_tree_id": revision.structured_content["source_tree_id"],
+            "revision_id": revision.structured_content["id"],
             "path": "src/main.ts",
         },
     )
@@ -381,7 +383,7 @@ async def _assert_mcp_can_author_canonical_experience() -> None:
     assert "css_text" not in (
         design_context.structured_content["platform_release"]["surface_theme"]
     )
-    assert surface.structured_content["experience_revision_id"] == revision.structured_content["id"]
+    assert surface.structured_content["surface_id"] == "mcp-ui.main"
     assert "content" not in written.structured_content
     assert inspected.structured_content["surfaces"][0]["surface_id"] == "mcp-ui.main"
     assert inspected.structured_content["dirty_paths"] == ["src/main.ts"]
@@ -471,7 +473,7 @@ async def _assert_mcp_can_create_and_run_application_tests() -> None:
     await server.call_tool(
         "write_source_file",
         {
-            "source_tree_id": revision.structured_content["source_tree_id"],
+            "revision_id": revision.structured_content["id"],
             "path": "actions/echo.py",
             "content": "def run(ctx, input):\n    return {'value': input['value']}\n",
             "role": "action",
@@ -492,7 +494,7 @@ async def _assert_mcp_can_create_and_run_application_tests() -> None:
         "create_test_case",
         {
             "application_revision_id": revision.structured_content["id"],
-            "action_revision_id": action.structured_content["id"],
+            "action_id": action.structured_content["action_id"],
             "input_value": {"value": "ok"},
             "expected_output": {"value": "ok"},
         },
@@ -503,7 +505,7 @@ async def _assert_mcp_can_create_and_run_application_tests() -> None:
     )
 
     assert (
-        test.structured_content["action_revision_id"] == action.structured_content["id"]
+        test.structured_content["action_id"] == action.structured_content["action_id"]
     )
     assert invocations.structured_content["result"][0]["status"] == "succeeded"
 
@@ -519,7 +521,7 @@ async def _assert_mcp_can_run_active_action() -> None:
     await server.call_tool(
         "write_source_file",
         {
-            "source_tree_id": revision.structured_content["source_tree_id"],
+            "revision_id": revision.structured_content["id"],
             "path": "actions/echo.py",
             "content": "def run(ctx, input):\n    return {'value': input['value']}\n",
             "role": "action",

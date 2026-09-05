@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Protocol
 
+from n4x.graph.bindings import RevisionBindings
 from n4x.graph.store import node_ref
 from n4x.graph.uow import GraphUnitOfWork
 from n4x.kernel.errors import ImmutableRevisionError, ValidationFailure
@@ -14,7 +15,6 @@ from n4x.kernel.models import (
     CallbackRoute,
     ExecutionContext,
     Invocation,
-    TestCase,
     now_utc,
 )
 from n4x.graph.service_base import transactional
@@ -32,9 +32,13 @@ class ActionRuntimePort(Protocol):
         execution_context: ExecutionContext | None = None,
     ) -> Invocation: ...
 
-    def import_check(self, action_revision: ActionRevision) -> None: ...
+    def import_check(
+        self, action_revision: ActionRevision, *, application_revision_id: str
+    ) -> None: ...
 
-    def materialize(self, action_revision: ActionRevision): ...
+    def materialize(
+        self, action_revision: ActionRevision, *, application_revision_id: str
+    ): ...
 
     def submit(
         self,
@@ -53,29 +57,31 @@ class Invocations:
         self.store = uow.store
         self.records = uow.records
         self.runtime = runtime
+        self.bindings = RevisionBindings(uow)
 
     def run_draft_action(
         self,
-        action_revision_id: str,
+        application_revision_id: str,
+        action_id: str,
         input_value: dict[str, Any],
         *,
         data_space_id: str | None = None,
     ) -> Invocation:
         with self.uow:
-            action_revision = self.records.action_revisions[action_revision_id]
-            if action_revision.kind == "migration":
-                raise ValidationFailure(
-                    "migration revisions run only through activation"
-                )
-            app_revision = self.records.revisions[
-                action_revision.application_revision_id
-            ]
+            app_revision = self.records.revisions[application_revision_id]
             if app_revision.status != "draft":
                 raise ImmutableRevisionError(
                     "run_draft_action requires a draft revision"
                 )
+            action_revision = self.bindings.action_revision(
+                app_revision.id, action_id
+            )
+            if action_revision.kind == "migration":
+                raise ValidationFailure(
+                    "migration revisions run only through activation"
+                )
             execution_context = self._draft_execution_context(
-                action_revision, app_revision.application_id, data_space_id
+                app_revision, data_space_id
             )
         return self.runtime.run(
             action_revision,
@@ -100,39 +106,51 @@ class Invocations:
             if (
                 action.application_id != application_id
                 or action.active_revision_id is None
+                or application.active_revision_id is None
             ):
                 raise KeyError(f"action is not active for application: {action_id}")
-            revision = self.records.action_revisions[action.active_revision_id]
+            revision = self.bindings.action_revision(
+                application.active_revision_id, action_id
+            )
             if revision.kind == "migration":
                 raise ValidationFailure(
                     "migration revisions run only through activation"
                 )
+            execution_context = ExecutionContext(
+                correlation_id=str(uuid.uuid4()),
+                application_revision_id=application.active_revision_id,
+                application_id=application_id,
+            )
         return self.runtime.run(
-            revision, input_value, invocation_kind="active"
+            revision,
+            input_value,
+            invocation_kind="active",
+            execution_context=execution_context,
         )
 
     def submit_draft_action(
         self,
-        action_revision_id: str,
+        application_revision_id: str,
+        action_id: str,
         input_value: dict[str, Any],
         *,
         data_space_id: str | None = None,
     ) -> Invocation:
         with self.uow:
-            action_revision = self.records.action_revisions[action_revision_id]
-            if action_revision.kind == "migration":
-                raise ValidationFailure(
-                    "migration revisions run only through activation"
-                )
-            app_revision = self.records.revisions[
-                action_revision.application_revision_id
-            ]
+            app_revision = self.records.revisions[application_revision_id]
             if app_revision.status != "draft":
                 raise ImmutableRevisionError(
                     "submit_draft_action requires a draft revision"
                 )
+            action_revision = self.bindings.action_revision(
+                app_revision.id, action_id
+            )
+            if action_revision.kind == "migration":
+                raise ValidationFailure(
+                    "migration revisions run only through activation"
+                )
             execution_context = self._draft_execution_context(
-                action_revision, app_revision.application_id, data_space_id
+                app_revision, data_space_id
             )
         return self.runtime.submit(
             action_revision,
@@ -157,15 +175,26 @@ class Invocations:
             if (
                 action.application_id != application_id
                 or action.active_revision_id is None
+                or application.active_revision_id is None
             ):
                 raise KeyError(f"action is not active for application: {action_id}")
-            revision = self.records.action_revisions[action.active_revision_id]
+            revision = self.bindings.action_revision(
+                application.active_revision_id, action_id
+            )
             if revision.kind == "migration":
                 raise ValidationFailure(
                     "migration revisions run only through activation"
                 )
+            execution_context = ExecutionContext(
+                correlation_id=str(uuid.uuid4()),
+                application_revision_id=application.active_revision_id,
+                application_id=application_id,
+            )
         return self.runtime.submit(
-            revision, input_value, invocation_kind="active"
+            revision,
+            input_value,
+            invocation_kind="active",
+            execution_context=execution_context,
         )
 
     def cancel_invocation(self, invocation_id: str) -> Invocation:
@@ -191,10 +220,21 @@ class Invocations:
             action_revision = self.records.action_revisions[
                 route.target_action_revision_id
             ]
+            application = self.records.applications[route.application_id]
+            if application.active_revision_id is None:
+                raise ValidationFailure(
+                    f"application has no active revision: {route.application_id}"
+                )
+            execution_context = ExecutionContext(
+                correlation_id=str(uuid.uuid4()),
+                application_revision_id=application.active_revision_id,
+                application_id=route.application_id,
+            )
         invocation = self.runtime.run(
             action_revision,
             payload,
             invocation_kind="callback",
+            execution_context=execution_context,
         )
         with self.uow:
             current = self.records.callback_routes[route_id]
@@ -225,21 +265,23 @@ class Invocations:
                 raise ImmutableRevisionError(
                     "tests require a draft, validating, or active revision"
                 )
-            tests = [
-                test
-                for test in self.records.test_cases.values()
-                if test.application_revision_id == app_revision.id
-            ]
+            tests = self.bindings.test_cases(app_revision.id)
             revisions = {
-                test.id: self.records.action_revisions[test.action_revision_id]
+                test.id: self.bindings.action_revision(app_revision.id, test.action_id)
                 for test in tests
             }
+            execution_context = ExecutionContext(
+                correlation_id=str(uuid.uuid4()),
+                application_revision_id=app_revision.id,
+                application_id=app_revision.application_id,
+            )
         invocations = []
         for test in tests:
             invocation = self.runtime.run(
                 revisions[test.id],
                 test.input,
                 invocation_kind="test",
+                execution_context=execution_context,
             )
             invocations.append(invocation)
             if (
@@ -249,50 +291,27 @@ class Invocations:
                 raise ValidationFailure(f"test failed: {test.id}")
         return invocations
 
-    @transactional
-    def create_test_case(
-        self,
-        application_revision_id: str,
-        action_revision_id: str,
-        input_value: dict[str, Any],
-        expected_output: Any,
-    ) -> TestCase:
-        if self.records.action_revisions[action_revision_id].kind == "migration":
-            raise ValidationFailure(
-                "migration revisions run only through activation, not TestCase"
-            )
-        test = TestCase(
-            id=str(uuid.uuid4()),
-            application_revision_id=application_revision_id,
-            action_revision_id=action_revision_id,
-            input=input_value,
-            expected_output=expected_output,
-        )
-        self.records.test_cases.save(test)
-        self.store.create_edge(
-            node_ref("ApplicationRevision", id=application_revision_id),
-            "HAS_TEST",
-            node_ref("TestCase", id=test.id),
-        )
-        self.store.create_edge(
-            node_ref("TestCase", id=test.id),
-            "TESTS",
-            node_ref("ActionRevision", id=action_revision_id),
-        )
-        return test
-
-    def run_migration(self, action_revision_id: str) -> Invocation:
+    def run_migration(
+        self, application_revision_id: str, action_revision_id: str
+    ) -> Invocation:
         with self.uow:
             revision = self.records.action_revisions[action_revision_id]
             if revision.kind != "migration":
                 raise ValidationFailure(
                     "migration execution requires ActionRevision.kind=migration"
                 )
+            app_revision = self.records.revisions[application_revision_id]
             input_value = dict(revision.migration_metadata.get("input", {}))
+            execution_context = ExecutionContext(
+                correlation_id=str(uuid.uuid4()),
+                application_revision_id=app_revision.id,
+                application_id=app_revision.application_id,
+            )
         invocation = self.runtime.run(
             revision,
             input_value,
             invocation_kind="migration",
+            execution_context=execution_context,
         )
         if invocation.status != "succeeded":
             raise ValidationFailure(
@@ -300,15 +319,15 @@ class Invocations:
             )
         return invocation
 
-    def validate_action_import(self, revision: ActionRevision) -> None:
-        self.runtime.import_check(revision)
+    def validate_action_import(
+        self, revision: ActionRevision, *, application_revision_id: str
+    ) -> None:
+        self.runtime.import_check(
+            revision, application_revision_id=application_revision_id
+        )
 
     def resolve_dependencies(self, application_revision_id: str) -> dict[str, Any]:
-        action_revisions = [
-            item
-            for item in self.records.action_revisions.values()
-            if item.application_revision_id == application_revision_id
-        ]
+        action_revisions = self.bindings.action_revisions(application_revision_id)
         python = None
         if action_revisions:
             result = self.runtime.python_environments.prepare(
@@ -324,12 +343,13 @@ class Invocations:
         self, application_revision_id: str
     ) -> dict[str, Any]:
         materialized_actions = []
-        for revision in self.records.action_revisions.values():
-            if revision.application_revision_id == application_revision_id:
-                path = self.runtime.materialize(revision)
-                materialized_actions.append(
-                    {"revision_id": revision.id, "path": str(path)}
-                )
+        for revision in self.bindings.action_revisions(application_revision_id):
+            path = self.runtime.materialize(
+                revision, application_revision_id=application_revision_id
+            )
+            materialized_actions.append(
+                {"revision_id": revision.id, "path": str(path)}
+            )
         return {"actions": materialized_actions}
 
     @transactional
@@ -343,10 +363,8 @@ class Invocations:
         metadata: dict[str, Any] | None = None,
     ) -> CallbackRoute:
         action_revision = self.records.action_revisions[target_action_revision_id]
-        app_revision = self.records.revisions[
-            action_revision.application_revision_id
-        ]
-        if app_revision.application_id != application_id:
+        action = self.records.actions[action_revision.action_id]
+        if action.application_id != application_id:
             raise ValueError(
                 "callback target action belongs to a different application"
             )
@@ -385,17 +403,14 @@ class Invocations:
 
     def _draft_execution_context(
         self,
-        action_revision: ActionRevision,
-        application_id: str,
+        app_revision,
         data_space_id: str | None,
     ) -> ExecutionContext:
+        application_id = app_revision.application_id
         space_id = data_space_id or "production"
         data_space = self.records.data_spaces.get((application_id, space_id))
         if data_space is None:
             raise ValidationFailure(f"unknown DataSpace: {space_id}")
-        app_revision = self.records.revisions[
-            action_revision.application_revision_id
-        ]
         if data_space.kind == "development":
             deployment = next(
                 (

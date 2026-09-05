@@ -374,7 +374,7 @@ def _revision(prefix: str, application_id: str, number: int) -> ApplicationRevis
     return ApplicationRevision(
         id=f"{prefix}-revision-{number}",
         application_id=application_id,
-        source_tree_id=f"{prefix}-source-{number}",
+        status="draft",
     )
 
 

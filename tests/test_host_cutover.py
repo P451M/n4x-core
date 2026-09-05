@@ -26,7 +26,9 @@ def test_host_boots_official_import_and_proxies_health(tmp_path: Path) -> None:
         assert body["host"]["adapter"] == HOST_ADAPTER
         assert body["system"]["revision_id"] == revision.id
         assert body["system"]["content_root"].startswith("sha256:")
-        assert body["system"]["source_tree_id"] == revision.source_tree_id
+        assert body["system"]["source_tree_id"] == host.system_graph.tree_id(
+            revision.id
+        )
         info = client.get("/n4x/system/info")
         assert info.status_code == 200
         assert info.json()["host_abi"] == HOST_ADAPTER
@@ -193,7 +195,7 @@ def test_healed_source_runs_after_rematerialize(tmp_path: Path) -> None:
         revision = host.boot_active()
         marker = "n4x_healed_marker = True\n"
         host.system_graph.source.write_source_file(
-            revision.source_tree_id,
+            revision.id,
             "n4x/system/healed_marker.py",
             marker,
             role="helper",

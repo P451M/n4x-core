@@ -100,6 +100,47 @@ def _attached_database(runtime: SystemRuntime) -> str | None:
     return database if isinstance(database, str) and database else None
 
 
+def _entity_inventory(
+    runtime: SystemRuntime,
+    entities,
+    revisions,
+    owner_field: str,
+) -> list[dict[str, Any]]:
+    bindings = runtime.source.bindings
+    items = []
+    for entity in sorted(entities, key=lambda item: item.id):
+        drafts = [
+            revision
+            for revision in revisions
+            if getattr(revision, owner_field) == entity.id
+            and revision.status == "draft"
+        ]
+        draft = (
+            max(drafts, key=lambda item: item.created_at) if drafts else None
+        )
+
+        def tree_bits(revision_id: str | None) -> tuple[str | None, str | None]:
+            if not revision_id:
+                return None, None
+            tree = bindings.tree(revision_id)
+            return tree.id, tree.status
+
+        draft_tree, draft_status = tree_bits(None if draft is None else draft.id)
+        active_tree, active_status = tree_bits(entity.active_revision_id)
+        items.append(
+            {
+                "id": entity.id,
+                "name": entity.name,
+                "status": entity.status,
+                "active_revision_id": entity.active_revision_id,
+                "draft_revision_id": None if draft is None else draft.id,
+                "source_tree_id": draft_tree or active_tree,
+                "tree_status": draft_status or active_status,
+            }
+        )
+    return items
+
+
 def create_system_mcp(
     runtime: SystemRuntime | None = None,
     *,
@@ -118,7 +159,7 @@ def create_system_mcp(
 
     @mcp.tool(**_READ)
     def inspect_system() -> dict[str, Any]:
-        """Inspect the enabled System revision and its source tree."""
+        """Inspect the enabled System revision and authoring inventory."""
         info = system_info()
         enabled = None
         try:
@@ -135,11 +176,24 @@ def create_system_mcp(
             info.update(
                 {
                     "revision_id": enabled.id,
-                    "source_tree_id": enabled.source_tree_id,
+                    "source_tree_id": runtime.source.bindings.tree_id(enabled.id),
+                    "tree_status": runtime.source.bindings.tree(enabled.id).status,
                     "content_root": enabled.content_root,
                     "provenance_kind": enabled.provenance_kind,
                 }
             )
+        info["applications"] = _entity_inventory(
+            runtime,
+            runtime.uow.records.applications.values(),
+            runtime.uow.records.revisions.values(),
+            "application_id",
+        )
+        info["experiences"] = _entity_inventory(
+            runtime,
+            runtime.uow.records.experiences.values(),
+            runtime.uow.records.experience_revisions.values(),
+            "experience_id",
+        )
         return info
 
     @mcp.tool(**_READ)
@@ -354,13 +408,32 @@ def create_system_mcp(
         parent_revision_id: str | None = None,
     ) -> dict[str, Any]:
         """Create a backend Application draft."""
-        result = runtime.applications.create_revision(
+        prior = next(
+            (
+                item
+                for item in runtime.uow.applications.list_revisions(application_id)
+                if item.status == "draft"
+            ),
+            None,
+        )
+        revision = runtime.applications.create_revision(
             application_id,
             ui_profile=ui_profile,
             parent_revision_id=parent_revision_id,
-        ).model_dump(mode="json")
+        )
+        result = runtime.source.bindings.payload(revision.id)
+        result["reused"] = prior is not None and prior.id == revision.id
         result["authoring_next_step"] = APPLICATION_AUTHORING_NEXT_STEP
         return result
+
+    @mcp.tool(**_DESTROY)
+    def discard_application_revision(application_revision_id: str) -> dict[str, Any]:
+        """Discard a draft ApplicationRevision and its working tree."""
+        runtime.applications.discard_revision(application_revision_id)
+        return {
+            "discarded": True,
+            "application_revision_id": application_revision_id,
+        }
 
     @mcp.tool(**_WRITE)
     def create_runtime_dependency(
@@ -454,7 +527,7 @@ def create_system_mcp(
         application_revision_id: str,
         trigger_id: str,
         trigger_type: str,
-        action_revision_id: str,
+        action_id: str,
         config: dict[str, Any] | None = None,
         input_template: dict[str, Any] | None = None,
         overlap_policy: str | None = None,
@@ -468,7 +541,7 @@ def create_system_mcp(
             application_revision_id,
             trigger_id,
             trigger_type=trigger_type,
-            action_revision_id=action_revision_id,
+            action_id=action_id,
             config=config,
             input_template=input_template,
             overlap_policy=overlap_policy,
@@ -480,17 +553,21 @@ def create_system_mcp(
 
     @mcp.tool(**_WRITE)
     def run_draft_action(
-        action_revision_id: str,
+        application_revision_id: str,
+        action_id: str,
         input_value: dict[str, Any],
         data_space_id: str | None = None,
     ) -> dict[str, Any]:
-        """Run a draft ActionRevision from graph source.
+        """Run a draft action from the ApplicationRevision tree.
 
         Use before activation. For production data, use run_active_action on the
         active Application revision.
         """
         return runtime.invocations.run_draft_action(
-            action_revision_id, input_value, data_space_id=data_space_id
+            application_revision_id,
+            action_id,
+            input_value,
+            data_space_id=data_space_id,
         ).model_dump(mode="json")
 
     @mcp.tool(**_WRITE)
@@ -509,16 +586,20 @@ def create_system_mcp(
 
     @mcp.tool(**_WRITE)
     def submit_draft_action(
-        action_revision_id: str,
+        application_revision_id: str,
+        action_id: str,
         input_value: dict[str, Any],
         data_space_id: str | None = None,
     ) -> dict[str, Any]:
-        """Queue a draft ActionRevision without waiting.
+        """Queue a draft action without waiting.
 
         Use before activation. For production data, use submit_active_action.
         """
         return runtime.invocations.submit_draft_action(
-            action_revision_id, input_value, data_space_id=data_space_id
+            application_revision_id,
+            action_id,
+            input_value,
+            data_space_id=data_space_id,
         ).model_dump(mode="json")
 
     @mcp.tool(**_WRITE)
@@ -622,14 +703,14 @@ def create_system_mcp(
     @mcp.tool(**_WRITE)
     def create_test_case(
         application_revision_id: str,
-        action_revision_id: str,
+        action_id: str,
         input_value: dict[str, Any],
         expected_output: Any,
     ) -> dict[str, Any]:
         """Create a TestCase for a draft application revision."""
         return runtime.definitions.create_test_case(
             application_revision_id,
-            action_revision_id,
+            action_id,
             input_value,
             expected_output,
         ).model_dump(mode="json")
@@ -1107,15 +1188,26 @@ def create_system_mcp(
     def create_experience_revision(
         experience_id: str,
         ui_profile: Literal["n4x-default", "custom", "none"] | None = None,
+        parent_revision_id: str | None = None,
         application_access: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Create a frontend draft, then inspect its advisory design context."""
+        prior = next(
+            (
+                item
+                for item in runtime.uow.experiences.list_revisions(experience_id)
+                if item.status == "draft"
+            ),
+            None,
+        )
         revision = runtime.experiences.create_revision(
             experience_id,
             ui_profile=ui_profile,
+            parent_revision_id=parent_revision_id,
             application_access=application_access,
         )
-        result = revision.model_dump(mode="json")
+        result = runtime.source.bindings.payload(revision.id)
+        result["reused"] = prior is not None and prior.id == revision.id
         result["authoring_next_step"] = {
             "tool": "inspect_experience_design_context",
             "arguments": {
@@ -1128,6 +1220,15 @@ def create_system_mcp(
             ),
         }
         return result
+
+    @mcp.tool(**_DESTROY)
+    def discard_experience_revision(experience_revision_id: str) -> dict[str, Any]:
+        """Discard a draft ExperienceRevision and its working tree."""
+        runtime.experiences.discard_revision(experience_revision_id)
+        return {
+            "discarded": True,
+            "experience_revision_id": experience_revision_id,
+        }
 
     @mcp.tool(**_WRITE)
     def set_experience_application_access(
@@ -1235,17 +1336,17 @@ def create_system_mcp(
 
     @mcp.tool(**_WRITE)
     def write_source_file(
-        source_tree_id: str,
+        revision_id: str,
         path: str,
         content: str,
         role: str,
         language: str,
         expected_hash: str | None = None,
     ) -> dict[str, Any]:
-        """Write a graph SourceFile. Use for new files and rewrites; pass expected_hash from the last read."""
+        """Write a source file on a draft revision. Pass expected_hash from the last read."""
         return SourceFileSummary.from_source_file(
             runtime.source.write_source_file(
-                source_tree_id,
+                revision_id,
                 path,
                 content,
                 role=role,  # type: ignore[arg-type]
@@ -1257,7 +1358,7 @@ def create_system_mcp(
 
     @mcp.tool(**_WRITE)
     def apply_source_patch(
-        source_tree_id: str,
+        revision_id: str,
         path: str,
         patch: str,
         expected_hash: str | None = None,
@@ -1267,7 +1368,7 @@ def create_system_mcp(
 
         try:
             updated = runtime.source.apply_source_patch(
-                source_tree_id,
+                revision_id,
                 path,
                 patch,
                 expected_hash=expected_hash,
@@ -1281,15 +1382,15 @@ def create_system_mcp(
 
     @mcp.tool(**_WRITE)
     def rename_source_file(
-        source_tree_id: str,
+        revision_id: str,
         path: str,
         new_path: str,
         expected_hash: str | None = None,
     ) -> dict[str, Any]:
-        """Rename a graph-owned SourceFile."""
+        """Rename a source file on a draft revision."""
         return SourceFileSummary.from_source_file(
             runtime.source.rename_source_file(
-                source_tree_id,
+                revision_id,
                 path,
                 new_path,
                 expected_hash=expected_hash,
@@ -1299,48 +1400,58 @@ def create_system_mcp(
 
     @mcp.tool(**_DESTROY)
     def delete_source_file(
-        source_tree_id: str, path: str, expected_hash: str | None = None
+        revision_id: str, path: str, expected_hash: str | None = None
     ) -> dict[str, Any]:
-        """Delete a graph-owned SourceFile."""
+        """Delete a source file from a draft revision."""
         runtime.source.delete_source_file(
-            source_tree_id, path, expected_hash=expected_hash, tool="mcp"
+            revision_id, path, expected_hash=expected_hash, tool="mcp"
         )
         return {
             "deleted": True,
-            "source_tree_id": source_tree_id,
+            "revision_id": revision_id,
             "path": path,
         }
 
     @mcp.tool(**_READ)
     def read_source_file(
-        source_tree_id: str,
+        revision_id: str,
         path: str,
         offset: int | None = None,
         limit: int | None = None,
     ) -> dict[str, Any]:
-        """Read a graph-owned SourceFile, optionally a 1-based line range."""
+        """Read a source file on a revision, optionally a 1-based line range."""
         return runtime.source.read_source_file_range(
-            source_tree_id, path, offset=offset, limit=limit
+            runtime.source.bindings.tree_id(revision_id),
+            path,
+            offset=offset,
+            limit=limit,
         )
 
     @mcp.tool(**_READ)
     def search_source_tree(
-        source_tree_id: str,
+        revision_id: str,
         pattern: str,
         glob: str | None = None,
         limit: int = 50,
+        context: int = 2,
     ) -> list[dict[str, Any]]:
-        """Search graph SourceFile contents. Cap results; pattern is a regex."""
+        """Search source file contents on a revision. Cap results; pattern is a regex."""
         return runtime.source.search_source_tree(
-            source_tree_id, pattern, glob=glob, limit=limit
+            runtime.source.bindings.tree_id(revision_id),
+            pattern,
+            glob=glob,
+            limit=limit,
+            context=context,
         )
 
     @mcp.tool(**_READ)
-    def list_source_tree(source_tree_id: str) -> list[dict[str, Any]]:
-        """List files in a graph SourceTree."""
+    def list_source_tree(revision_id: str) -> list[dict[str, Any]]:
+        """List files on a revision's current SourceTree."""
         return [
             SourceFileSummary.from_source_file(file).model_dump(mode="json")
-            for file in runtime.source.list_source_tree(source_tree_id)
+            for file in runtime.source.list_source_tree(
+                runtime.source.bindings.tree_id(revision_id)
+            )
         ]
 
     @mcp.tool(**_WRITE)

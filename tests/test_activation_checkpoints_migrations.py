@@ -58,7 +58,7 @@ def _create_seeded_graph_app(
     )
     physical = relation_type.physical_type
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/seed.py",
         action_source(
             "def run(ctx, input):\n"
@@ -135,7 +135,7 @@ def test_final_active_edge_replacement_rolls_back_as_one_unit(
     app = system.create_application("atomic-active", "Atomic Active")
     first_revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        first_revision.source_tree_id,
+        first_revision.id,
         "actions/run.py",
         "def run(ctx, input):\n    return {'version': 1}\n",
         role="action",
@@ -152,7 +152,7 @@ def test_final_active_edge_replacement_rolls_back_as_one_unit(
 
     second_revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        second_revision.source_tree_id,
+        second_revision.id,
         "actions/run.py",
         "def run(ctx, input):\n    return {'version': 2}\n",
         role="action",
@@ -255,13 +255,12 @@ def test_migration_backfill_and_relation_rewiring(
     revision = system.create_application_revision(app.id)
     rel_rev = next(
         item
-        for item in system.uow.records.relation_type_revisions.values()
-        if item.application_revision_id == revision.id
-        and item.relation_type_id == "migrate.parent_child"
+        for item in system.source.bindings.relation_type_revisions(revision.id)
+        if item.relation_type_id == "migrate.parent_child"
     )
     physical = rel_rev.physical_type
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "migrations/rewire.py",
         action_source(
             "def run(ctx, input):\n"
@@ -271,7 +270,7 @@ def test_migration_backfill_and_relation_rewiring(
             "    replacement = upsert_object("
             "ctx, 'migrate.Child', {'name': 'new'}, object_id='new-child')\n"
             f"    ctx.graph.run_cypher('''MATCH ()-[r:{physical} "
-            "{{id: $id, application_id: $application_id}}]->() DELETE r''', "
+            "{id: $id, application_id: $application_id}]->() DELETE r''', "
             "{'id': 'parent-child', 'application_id': ctx.application_id, "
             "'data_space_id': ctx.data_space_id})\n"
             f"    merge_rel(ctx, '{physical}', 'migrate.parent_child', "
@@ -334,12 +333,11 @@ def test_failed_migration_restores_data_and_active_edges(
     revision = system.create_application_revision(app.id)
     physical = next(
         item.physical_type
-        for item in system.uow.records.relation_type_revisions.values()
-        if item.application_revision_id == revision.id
-        and item.relation_type_id == "migrate.parent_child"
+        for item in system.source.bindings.relation_type_revisions(revision.id)
+        if item.relation_type_id == "migrate.parent_child"
     )
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "migrations/fail.py",
         action_source(
             "def run(ctx, input):\n"
@@ -348,7 +346,7 @@ def test_failed_migration_restores_data_and_active_edges(
             "{**parent['values'], 'should_not_stick': True}, "
             "object_id='parent')\n"
             f"    ctx.graph.run_cypher('''MATCH ()-[r:{physical} "
-            "{{id: $id, application_id: $application_id}}]->() DELETE r''', "
+            "{id: $id, application_id: $application_id}]->() DELETE r''', "
             "{'id': 'parent-child', 'application_id': ctx.application_id, "
             "'data_space_id': ctx.data_space_id})\n"
             "    raise RuntimeError('migration failed')\n"

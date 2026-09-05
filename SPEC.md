@@ -55,7 +55,7 @@ Before adding Host, System, or other generic-runtime functionality, the question
 - The control graph owns the enabled SystemRevision (`(:System)-[:ACTIVE_REVISION]->(:SystemRevision)`). That edge is SoT. Host has an install file lock (one `n4x serve`); the lock is not a System policy store. There is no last-known-good pointer.
 - Neo4j is the authoritative store for System source, application definitions, source, runtime objects, relationships, and provenance. If Neo4j is down, the instance is down.
 - Large opaque byte payloads may live in an Application data volume when they are unsuitable for Neo4j. The graph remains semantic authority for their app-owned identity, relative reference, metadata, and relationships; the volume is authoritative only for the referenced bytes.
-- Graph-app source is canonical in graph `SourceFile` records. Filesystem source trees are materialized runtime artifacts only.
+- Graph-app source is canonical as interned `SourceContent` blobs pointed at by `SourceTree` `HAS_FILE` edges. `SourceFile` is a read DTO. Filesystem source trees are materialized runtime artifacts only.
 - Process-local maps may be disposable read caches or working sets, but they are never a durable mutation mechanism or repair authority.
 - Every durable mutation is expressed through one `GraphUnitOfWork`. Related node writes, structural edges, active-edge replacements, and app relations commit in one backing-store transaction or not at all.
 - A `GraphUnitOfWork` must not remain open across a wait that another thread or process needs in order to use the store. Action subprocesses, Cypher IPC, `uv`/`pnpm` builds, and scheduler-run actions are waits. Lookup and commit transactions close before those waits; results persist in a later unit of work.
@@ -66,13 +66,10 @@ Before adding Host, System, or other generic-runtime functionality, the question
 - `ApplicationObject.object_type_id` is canonical. Short names are display/input conveniences only.
 - App/domain relationships use generated physical Neo4j relationship types derived from `RelationType`.
 - Generic runtime code remains mechanism-only. Provider-specific logic such as IMAP, SMTP, CalDAV, Gmail, Outlook, Notion, or GMX, plus domain validation, query semantics, idempotency, retries, and conflict policy, belongs to graph-owned application source.
-- The isolated-development reset establishes `n4x.graph.metamodel.v5` as a fresh
-  baseline. There is no v4 graph/data migration or compatibility reader. Before
-  reset, every Application and Experience that must survive is exported as a
-  definition-only Package and proven importable into an isolated v5 runtime.
-  After reset those definitions are re-imported from the verified archives,
-  never reconstructed manually. This wipe/import path is a development reset of
-  an install, not how production System revisions are activated.
+- The isolated-development reset establishes `n4x.graph.metamodel.v6` as a fresh
+  baseline. There is no predecessor graph/data migration or compatibility
+  reader. Wipe and recreate instances. This wipe/import path is a development
+  reset of an install, not how production System revisions are activated.
 - Proof apps are not created by checked-in app-specific seed scripts. They are authored through the same generic MCP tools and authoring guidance that an AI client uses for new apps.
 - Applications never own frontend source, JavaScript dependencies, `ui_profile`, Surface definitions, or Experience activation.
 - An Experience may consume multiple Applications only through capabilities allowlisted by its active `ExperienceRevision`.
@@ -109,10 +106,8 @@ Required relationships:
 (:Application)-[:ACTIVE_REVISION]->(:ApplicationRevision)
 (:ApplicationRevision)-[:PARENT_REVISION]->(:ApplicationRevision)
 (:ApplicationRevision)-[:HAS_SOURCE_TREE]->(:SourceTree)
-(:SourceTree)-[:HAS_FILE]->(:SourceFile)
-(:SourceTree)-[:HAS_CHANGE]->(:SourceChange)
-(:SourceTree)-[:SNAPSHOT_OF]->(:SourceTree)
-(:SourceTree)-[:CLONED_FROM]->(:SourceTree)
+(:SystemRevision)-[:HAS_SOURCE_TREE]->(:SourceTree)
+(:SourceTree)-[:HAS_FILE {path, role, language, size}]->(:SourceContent)
 (:Application)-[:HAS_CHECKPOINT]->(:GraphCheckpoint)
 (:GraphCheckpoint)-[:CAPTURES_REVISION]->(:ApplicationRevision)
 (:Application)-[:HAS_DATA_SPACE]->(:DataSpace)
@@ -150,6 +145,10 @@ Required relationships:
 (:Application)-[:HAS_CALLBACK_ROUTE]->(:CallbackRoute)
 
 (:ApplicationRevision)-[:DECLARES_DEPENDENCY]->(:RuntimeDependency)
+(:ApplicationRevision)-[:HAS_ACTION_REVISION]->(:ActionRevision)
+(:ApplicationRevision)-[:HAS_OBJECT_TYPE_REVISION]->(:ObjectTypeRevision)
+(:ApplicationRevision)-[:HAS_RELATION_TYPE_REVISION]->(:RelationTypeRevision)
+(:ApplicationRevision)-[:HAS_TRIGGER_REVISION]->(:TriggerRevision)
 (:ApplicationRevision)-[:HAS_TEST]->(:TestCase)
 (:ApplicationRevision)-[:HAS_VALIDATION_REPORT]->(:ValidationReport)
 
@@ -163,15 +162,14 @@ Required relationships:
 
 (:Action)-[:HAS_REVISION]->(:ActionRevision)
 (:Action)-[:ACTIVE_REVISION]->(:ActionRevision)
-(:ActionRevision)-[:USES_SOURCE]->(:SourceFile)
 (:ActionRevision)-[:DEPENDS_ON]->(:RuntimeDependency)
 (:ActionRevision)-[:USES_SECRET]->(:SecretReference)
 
 (:Trigger)-[:HAS_REVISION]->(:TriggerRevision)
 (:Trigger)-[:ACTIVE_REVISION]->(:TriggerRevision)
-(:TriggerRevision)-[:INVOKES]->(:ActionRevision)
+(:TriggerRevision)-[:INVOKES]->(:Action)
 
-(:TestCase)-[:TESTS]->(:ActionRevision)
+(:TestCase)-[:TESTS]->(:Action)
 (:CredentialRecord)-[:USES_SECRET]->(:SecretReference)
 (:CallbackRoute)-[:TARGETS]->(:ActionRevision)
 ```
@@ -195,13 +193,11 @@ Required relationships:
 (:ExperienceRevision)-[:ALLOWS_RELATION_TYPE]->(:RelationType)
 (:ExperienceRevision)-[:ALLOWS_ACTION]->(:Action)
 (:ExperienceRevision)-[:DECLARES_SURFACE]->(:ExperienceSurface)
-(:ExperienceSurface)-[:USES_SOURCE]->(:SourceFile)
-(:ExperienceSurface)-[:BUILDS_TO]->(:BuildArtifact)
 ```
 
 `DECLARES_APPLICATION` identifies the Applications an Experience revision consumes. The three `ALLOWS_*` relationships are the least-privilege bridge allowlist and must target definitions owned by a declared Application. An allowlisted relation remains wholly owned by one Application and both endpoints remain objects of that same Application.
 
-An `ExperienceSurface` is an immutable declaration scoped to exactly one `ExperienceRevision`. Its identity is `(experience_revision_id, surface_id)` and it has no `HAS_REVISION` or `ACTIVE_REVISION` edge. Every Surface declares one `kind` (`browser` or `mcp_app`), one source entrypoint, its source-file closure, host metadata, and a CSP policy. Updating, adding, or deleting a Surface requires a new Experience revision.
+An `ExperienceSurface` is an interned declaration. Its storage `id` is the declaration hash. An ExperienceRevision points at it with `DECLARES_SURFACE`. It has no `HAS_REVISION` or `ACTIVE_REVISION` edge. Every Surface declares one `kind` (`browser` or `mcp_app`), one source entrypoint, its source-path closure, host metadata, and a CSP policy. Updating, adding, or deleting a Surface on a draft replaces the `DECLARES_SURFACE` pointer.
 
 The canonical declaration is a discriminated record:
 
@@ -363,14 +359,14 @@ The kernel does not write `CREATED_OBJECT` or `UPDATED_OBJECT`. Those edges rema
 Runtime artifacts are rebuildable and linked to their definitions.
 
 ```cypher
-(:ActionRevision)-[:MATERIALIZED_TO]->(:BuildArtifact)
-(:ExperienceSurface)-[:BUILDS_TO]->(:BuildArtifact)
-(:ApplicationRevision)-[:USES_PYTHON_ENV]->(:PythonEnvironment)
-(:ExperienceRevision)-[:USES_JAVASCRIPT_ENV]->(:JavaScriptEnvironment)
 (:ApplicationRevision)-[:HAS_BUILD_INVOCATION]->(:BuildInvocation)
 (:ExperienceRevision)-[:HAS_BUILD_INVOCATION]->(:BuildInvocation)
+(:ApplicationRevision)-[:USES_PYTHON_ENV]->(:PythonEnvironment)
+(:ExperienceRevision)-[:USES_JAVASCRIPT_ENV]->(:JavaScriptEnvironment)
 (:BuildInvocation)-[:PRODUCED]->(:BuildArtifact)
 ```
+
+Materialize and Surface-build cache keys are the interned declaration hash plus blob hashes from the revision's current tree. Environments and build artifacts hang off the Application or Experience revision, not interned declarations.
 
 Runtime artifacts can be deleted and rebuilt from graph source, dependency declarations, locks, package registries, and asset references.
 
@@ -481,24 +477,30 @@ Source is graph-owned.
 Required nodes:
 
 - `SourceTree`
-- `SourceFile`
-- `SourceChange`
+- `SourceContent`
+
+`SourceFile` is a read DTO hydrated from `HAS_FILE` properties plus the blob. There is no `SourceChange` node.
 
 Required behavior:
 
-- each source tree is owned by exactly one Application revision or Experience revision
+- interned trees are shared; `id` is `tree_hash`; they have no owner fields
+- a working tree has `id == {revision_id}.source`, `status=draft`, and exactly one inbound `HAS_SOURCE_TREE` from that draft
+- first revision with no parent points at the interned empty tree
+- a new draft copies `HAS_*` / `DECLARES_*` edges from its parent, including `HAS_SOURCE_TREE`
+- the first write copy-on-writes a working tree; later writes mutate that tree
+- activate interns the listing by `tree_hash` and deletes the working tree
 - Python/backend source remains under Application revisions; TypeScript/React frontend source remains under Experience revisions
-- every Experience Surface references entrypoint/source paths within its owning Experience revision's source tree; Surfaces do not require independent source trees, and optional file reuse does not couple their build artifacts
-- writes require draft source trees
+- source MCP tools take `revision_id`; payloads still include a derived `source_tree_id`
 - `expected_hash` and `expected_tree_hash` detect conflicts
-- batch source writes are atomic within the active `GraphUnitOfWork`, including related `HAS_FILE`, `HAS_CHANGE`, snapshot, and clone edges
-- each write creates `HAS_FILE` and `HAS_CHANGE` edges immediately
-- snapshotting a source tree creates immutable snapshot records and edges immediately
-- immutable snapshots use `SNAPSHOT_OF`; cloned draft trees use `CLONED_FROM`
+- batch source writes are atomic within the active `GraphUnitOfWork`
 - filesystem copies are materialized runtime artifacts and are never source authority
 - `apply_source_patch` locates each unified-diff hunk by unique `-` / ` ` context; `@@` line numbers are a hint; zero or two-plus matches write nothing
-- `search_source_tree` returns a capped set of regex matches
+- `search_source_tree` returns a capped set of regex matches with optional context
 - `read_source_file` may return a 1-based line range together with `total_lines` and `content_hash`
+- discard, copy-on-write, intern, and working-set delete collect interned
+  blobs, trees, and declarations with no inbound edge and no in-flight
+  Invocation / JobRecord / CallbackRoute pin; leftover orphans stay integrity
+  warnings, not failures
 
 ### 5.1 Platform Authoring Facilities
 
@@ -522,7 +524,7 @@ Required behavior:
 
 Migration code is `ActionRevision.kind = "migration"`. Those revisions run only during activation, once, after a checkpoint taken from `migration_metadata.mutates_application_data`. There is no kernel dry-run, operation plan, or `supports_dry_run` stage. An author who wants a preview writes a normal action that only `MATCH`es.
 
-Actions run trusted Python source from graph `SourceFile` records. Dependencies are declared as `RuntimeDependency` nodes and installed into per-`ApplicationRevision` `uv` environments.
+Actions run trusted Python source from the ApplicationRevision's current tree. Dependencies are interned `RuntimeDependency` nodes declared by the revision and installed into per-`ApplicationRevision` `uv` environments. Materialize cache keys are declaration hash plus blob hashes from that tree.
 
 Action context (`n4x.action.context.v2`):
 
@@ -544,7 +546,7 @@ There is no object/relation snapshot and no operation buffer. Apps mutate data w
 
 Session is not keyed by Application or action process. Concurrent actions are concurrent sessions; they see each other's commits. Last writer wins unless the Cypher does compare-and-set. Do not wait on provider I/O inside `transaction()`.
 
-The kernel does not stamp `application_id` or `data_space_id`. Apps set them from `ctx`. Store fields on `ApplicationObject.values` (a map). Experience list and checkpoints read that convention; flattened node properties do not appear in Experience list. Relationship type is `RelationTypeRevision.physical_type` (`APP_REL_…`); embed it in query text. Cypher cannot take a relationship type as a parameter.
+The kernel does not stamp `application_id` or `data_space_id`. Apps set them from `ctx`. Store fields on `ApplicationObject.values` (a map). In Cypher, assign that field as JSON text: Neo4j properties cannot be maps. Kernel repository writes encode and decode it. Experience list and checkpoints read that convention; flattened node properties do not appear in Experience list. Relationship type is `RelationTypeRevision.physical_type` (`APP_REL_…`); embed it in query text. Cypher cannot take a relationship type as a parameter.
 
 Cypher is served through a System-owned `CypherGateway`. The gateway opens its own short unit of work (audit plus statements). It is not mounted on an open System catalog UoW. Apps have no Bolt driver or credentials. Activation rejects a revision that includes actions when the gateway cannot execute Cypher. Import/`check_only` does not open a write gateway.
 
@@ -705,7 +707,7 @@ Application activation is a single pass. `validate_application_revision` and `ru
 
 ```text
 draft revision
-  -> frozen source snapshot
+  -> intern source tree
   -> declared Python dependency resolution + lock
   -> declared artifact builds
   -> application-data checkpoint if migrations mutate data
@@ -736,7 +738,7 @@ Experience activation is independent of Application activation and is also a sin
 
 ```text
 draft ExperienceRevision
-  -> frozen Experience source snapshot
+  -> intern Experience source tree
   -> declared Surface builds
   -> atomic Experience ACTIVE_REVISION replacement
   -> HTTP/MCP catalog remount + list-changed notifications
@@ -762,16 +764,13 @@ Failure leaves the prior Experience revision active. Validate (the tool) checks 
 
 Repair reads canonical durable records from the active `GraphStore`. It must not derive repair truth solely from process-local maps. Validation and repair share a declared ownership/revision schema so every durable node type has an explicit expected path.
 
-The accepted Surface Hosting Reset deliberately ends compatibility with
-prototype graph metamodels before v5. Bootstrap stamps
-`n4x.graph.metamodel.v5` only when the store is fresh: no `N4XRoot`, or only an
-unstamped root and no other nodes. A graph stamped with another version, or a
-non-empty unversioned graph, fails startup with a reset-required error. The
-operator must call the guarded `reset_dev_graph` MCP tool with
-`confirmation_database` set to the dedicated development database. Reset deletes every node,
-bootstraps schema, creates `N4XRoot`, and stamps v5. There is no predecessor
-graph migration, implicit reinterpretation, or Widget/route/resource compatibility
-reader.
+Bootstrap stamps `n4x.graph.metamodel.v6` only when the store is fresh: no
+`N4XRoot`, or only an unstamped root and no other nodes. A graph stamped with
+another version, or a non-empty unversioned graph, fails startup with a
+reset-required error. The operator must call the guarded `reset_dev_graph` MCP
+tool with `confirmation_database` set to the dedicated development database.
+Reset deletes every node, bootstraps schema, creates `N4XRoot`, and stamps v6.
+There is no predecessor graph migration.
 
 ## 12. MCP Tool Surface
 
@@ -965,7 +964,7 @@ Required architecture tests:
 
 Required end-to-end tests:
 
-- fresh graph bootstrap stamps `n4x.graph.metamodel.v5`, while an older or
+- fresh graph bootstrap stamps `n4x.graph.metamodel.v6`, while an older or
   non-empty unversioned graph fails with reset-required guidance
 - Notes Application authored through MCP and usable through the Office browser Experience and an MCP App Surface
 - Mail app authored through MCP, syncs real IMAP mail, sends a test mail
@@ -1106,26 +1105,25 @@ corruption, not publisher authenticity.
 
 Import normally requires the supported Package format, graph metamodel and
 schema fingerprint, action/subprocess contracts, and Experience Surface/bridge
-major version. One explicit fresh-v5 bootstrap exception accepts a
-`n4x.graph.metamodel.v4` Package v2 archive only when `include_data=false`.
+major version. A predecessor graph metamodel is incompatible. There is no
+definition-only exception for older stamps.
 A readable Package v2 archive whose contracts otherwise disagree may be
 imported with explicit `allow_incompatible` consent: definitions land,
 Applications and Experiences stay `disabled`, data is not restored, and
 activation does not run. That is not a compatibility reader; a client may
 then write and activate a new revision for the current System.
 The importer materializes its logical active Application/Experience working set
-through ordinary v5 services and recomputes destination identities, hashes, and
-physical relation types. It rejects v4 objects, relations, history, runtime
-records, and artifacts. This is Package-based definition transfer, not a v4
+through ordinary v6 services and recomputes destination identities, hashes, and
+physical relation types. This is Package-based working-set transfer, not a
 graph migration or general cross-metamodel compatibility reader.
 Dependency specifications are portable through normal activation; exact
 cross-machine Python/npm lock reproduction is not guaranteed by Package v2.
 `ui_profile=n4x-default` intentionally uses the destination System's active
 theme.
 
-`n4x.package.v1` is the obsolete Widget-based format and a v4 runtime rejects
-it with a precise compatibility error. It never reinterprets Widget members as
-Surfaces.
+`n4x.package.v1` is the obsolete Widget-based format and the current runtime
+rejects it with a precise compatibility error. It never reinterprets Widget
+members as Surfaces.
 
 An authenticated client writes archive bytes into the destination `packages`
 directory over HTTP (`PUT /packages/{archive_name}`) using the same instance
@@ -1177,8 +1175,8 @@ requires a separately versioned contract and is not implied by Package data.
 - module federation
 - hostile-browser sandboxing
 - automatic graph-metamodel migration or graph compatibility readers for
-  pre-v5 prototype graphs; the definition-only v4 Package exception in §18.2
-  is the sole predecessor import path
+  predecessor graphs; Package import requires the current metamodel stamp
+  unless the caller passes explicit `allow_incompatible`
 - complete provenance for arbitrary direct driver writes
 - durable distributed job execution
 - compatibility migration from pre-stability disposable prototype graph formats

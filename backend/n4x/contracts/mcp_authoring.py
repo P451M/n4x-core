@@ -1,4 +1,4 @@
-MCP_AUTHORING_VERSION = "n4x.mcp.authoring.v8"
+MCP_AUTHORING_VERSION = "n4x.mcp.authoring.v9"
 
 MCP_AUTHORING_SCHEMA = {
     "version": MCP_AUTHORING_VERSION,
@@ -38,9 +38,12 @@ MCP_AUTHORING_SCHEMA = {
         ],
         "create_experience_revision": [
             "experience_id",
+            "parent_revision_id",
             "ui_profile",
             "application_access",
         ],
+        "discard_application_revision": ["application_revision_id"],
+        "discard_experience_revision": ["experience_revision_id"],
         "set_experience_application_access": [
             "experience_revision_id",
             "application_access",
@@ -67,11 +70,11 @@ MCP_AUTHORING_SCHEMA = {
             "experience_revision_id",
             "surface_id",
         ],
-        "write_source_file": ["source_tree_id", "path", "content", "role"],
-        "apply_source_patch": ["source_tree_id", "path", "patch"],
-        "search_source_tree": ["source_tree_id", "pattern"],
-        "read_source_file": ["source_tree_id", "path"],
-        "list_source_tree": ["source_tree_id"],
+        "write_source_file": ["revision_id", "path", "content", "role"],
+        "apply_source_patch": ["revision_id", "path", "patch"],
+        "search_source_tree": ["revision_id", "pattern", "context"],
+        "read_source_file": ["revision_id", "path"],
+        "list_source_tree": ["revision_id"],
         "create_development_deployment": [
             "experience_revision_id",
             "application_revision_ids",
@@ -106,6 +109,28 @@ MCP_AUTHORING_SCHEMA = {
         "validate_experience_revision": ["experience_revision_id"],
         "activate_experience_revision": ["experience_revision_id"],
         "activate_application_revision": ["application_revision_id"],
+        "run_draft_action": [
+            "application_revision_id",
+            "action_id",
+            "input_value",
+        ],
+        "submit_draft_action": [
+            "application_revision_id",
+            "action_id",
+            "input_value",
+        ],
+        "create_trigger": [
+            "application_revision_id",
+            "trigger_id",
+            "trigger_type",
+            "action_id",
+        ],
+        "create_test_case": [
+            "application_revision_id",
+            "action_id",
+            "input_value",
+            "expected_output",
+        ],
         "run_active_action": ["application_id", "action_id", "input_value"],
         "inspect_objects": ["application_id"],
         "inspect_relations": ["application_id"],

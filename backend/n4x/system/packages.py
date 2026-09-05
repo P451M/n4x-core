@@ -30,6 +30,8 @@ from n4x.contracts.package import (
     PackageManifest,
     PackagePayload,
 )
+from n4x.graph.bindings import RevisionBindings
+from n4x.graph.intern_gc import delete_interned_orphans
 from n4x.graph.store import node_ref, relation_physical_type
 from n4x.graph.uow import GraphUnitOfWork
 from n4x.kernel.errors import ValidationFailure
@@ -50,11 +52,6 @@ from n4x.kernel.models import (
 
 _ARCHIVE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.n4xp$")
 _ALLOWED_ENTRIES = {"manifest.json", "payload.json"}
-V4_GRAPH_METAMODEL_VERSION = "n4x.graph.metamodel.v4"
-V4_GRAPH_SCHEMA_FINGERPRINT = (
-    "sha256:e939e862b9dd9d88d1a17b8fe699107c"
-    "f5230b2ebebab905624df2d931d8b5d0"
-)
 
 
 class PackageService:
@@ -70,7 +67,6 @@ class PackageService:
         applications,
         schema,
         definitions,
-        invocations,
         experiences,
         experience_surfaces,
         activation,
@@ -87,12 +83,12 @@ class PackageService:
         self.applications = applications
         self.schema = schema
         self.definitions = definitions
-        self.invocations = invocations
         self.experiences = experiences
         self.experience_surfaces = experience_surfaces
         self.activation = activation
         self.experience_activation = experience_activation
         self.scheduler = scheduler
+        self.bindings = RevisionBindings(uow)
 
     def preview(
         self,
@@ -228,6 +224,7 @@ class PackageService:
                 self._delete_application_subgraph(application_id)
             if experience_id is not None:
                 self._delete_experience_subgraph(experience_id)
+            delete_interned_orphans(self.uow)
         self.scheduler.remount()
         return {
             **exported,
@@ -518,11 +515,7 @@ class PackageService:
                 f"Application revision is not active: {revision.id}"
             )
         actions = sorted(
-            (
-                item
-                for item in self.records.action_revisions.values()
-                if item.application_revision_id == revision.id
-            ),
+            self.bindings.action_revisions(revision.id),
             key=lambda item: (
                 item.action_id,
                 item.id
@@ -572,47 +565,41 @@ class PackageService:
             omitted.append({"kind": "credentials", "application_id": application_id})
         captured = PackageApplication(
             application=application.model_dump(mode="json"),
-            revision=revision.model_dump(mode="json"),
+            revision=self.bindings.payload(revision.id),
             source_files=[
                 item.model_dump(mode="json")
                 for item in sorted(
-                    self.source.list_source_tree(revision.source_tree_id),
+                    self.source.list_source_tree(self.bindings.tree_id(revision.id)),
                     key=lambda item: item.path,
                 )
             ],
             dependencies=[
                 item.model_dump(mode="json")
                 for item in sorted(
-                    (
-                        item
-                        for item in self.records.runtime_dependencies.values()
-                        if item.owner_kind == "ApplicationRevision"
-                        and item.owner_id == revision.id
-                    ),
+                    self.bindings.dependencies(revision.id),
                     key=lambda item: (item.package, item.spec, item.id),
                 )
             ],
             object_types=self._definition_pairs(
-                "object_types", "object_type_revisions", revision.id, "object_type_id"
+                "object_types",
+                self.bindings.object_type_revisions(revision.id),
+                "object_type_id",
             ),
             relation_types=self._definition_pairs(
                 "relation_types",
-                "relation_type_revisions",
-                revision.id,
+                self.bindings.relation_type_revisions(revision.id),
                 "relation_type_id",
             ),
             actions=action_values,
             triggers=self._definition_pairs(
-                "triggers", "trigger_revisions", revision.id, "trigger_id"
+                "triggers",
+                self.bindings.trigger_revisions(revision.id),
+                "trigger_id",
             ),
             tests=[
                 item.model_dump(mode="json")
                 for item in sorted(
-                    (
-                        item
-                        for item in self.records.test_cases.values()
-                        if item.application_revision_id == revision.id
-                    ),
+                    self.bindings.test_cases(revision.id),
                     key=lambda item: item.id,
                 )
             ],
@@ -642,34 +629,25 @@ class PackageService:
     def _capture_experience(self, experience, revision) -> PackageExperience:
         return PackageExperience(
             experience=experience.model_dump(mode="json"),
-            revision=revision.model_dump(mode="json"),
+            revision=self.bindings.payload(revision.id),
             source_files=[
                 item.model_dump(mode="json")
                 for item in sorted(
-                    self.source.list_source_tree(revision.source_tree_id),
+                    self.source.list_source_tree(self.bindings.tree_id(revision.id)),
                     key=lambda item: item.path,
                 )
             ],
             dependencies=[
                 item.model_dump(mode="json")
                 for item in sorted(
-                    (
-                        item
-                        for item in self.records.runtime_dependencies.values()
-                        if item.owner_kind == "ExperienceRevision"
-                        and item.owner_id == revision.id
-                    ),
+                    self.bindings.dependencies(revision.id),
                     key=lambda item: (item.package, item.spec, item.id),
                 )
             ],
             surfaces=[
                 item.model_dump(mode="json")
                 for item in sorted(
-                    (
-                        item
-                        for item in self.records.experience_surfaces.values()
-                        if item.experience_revision_id == revision.id
-                    ),
+                    self.bindings.surfaces(revision.id),
                     key=lambda item: item.surface_id,
                 )
             ],
@@ -678,14 +656,10 @@ class PackageService:
     def _definition_pairs(
         self,
         stable_collection: str,
-        revision_collection: str,
-        owner_revision_id: str,
+        revisions: list[Any],
         stable_id_field: str,
-        *,
-        revision_field: str = "application_revision_id",
     ) -> list[dict[str, Any]]:
         stables = getattr(self.records, stable_collection)
-        revisions = getattr(self.records, revision_collection)
         return [
             {
                 "stable": stables[getattr(item, stable_id_field)].model_dump(
@@ -694,11 +668,7 @@ class PackageService:
                 "revision": item.model_dump(mode="json"),
             }
             for item in sorted(
-                (
-                    item
-                    for item in revisions.values()
-                    if getattr(item, revision_field) == owner_revision_id
-                ),
+                revisions,
                 key=lambda item: (
                     getattr(item, stable_id_field),
                     item.id
@@ -922,12 +892,12 @@ class PackageService:
         self._mapped(
             id_map,
             "SourceTree",
-            package.revision["source_tree_id"],
-            revision.source_tree_id,
+            package.revision.get("source_tree_id") or revision.id,
+            self.bindings.tree_id(revision.id),
         )
         for values in package.source_files:
             self.source.write_source_file(
-                revision.source_tree_id,
+                revision.id,
                 values["path"],
                 values["content"],
                 role=values["role"],
@@ -1035,9 +1005,7 @@ class PackageService:
                 revision.id,
                 stable_id,
                 trigger_type=source_revision["trigger_type"],
-                action_revision_id=id_map["ActionRevision"][
-                    source_revision["action_revision_id"]
-                ],
+                action_id=source_revision["action_id"],
                 config=source_revision.get("config", {}),
                 input_template=source_revision.get("input_template", {}),
                 overlap_policy=source_revision.get("overlap_policy"),
@@ -1048,9 +1016,9 @@ class PackageService:
             )
             self._mapped(id_map, "TriggerRevision", source_revision["id"], created.id)
         for values in package.tests:
-            created = self.invocations.create_test_case(
+            created = self.definitions.create_test_case(
                 revision.id,
-                id_map["ActionRevision"][values["action_revision_id"]],
+                values["action_id"],
                 values["input"],
                 values["expected_output"],
             )
@@ -1094,12 +1062,12 @@ class PackageService:
         self._mapped(
             id_map,
             "SourceTree",
-            package.revision["source_tree_id"],
-            revision.source_tree_id,
+            package.revision.get("source_tree_id") or revision.id,
+            self.bindings.tree_id(revision.id),
         )
         for source in package.source_files:
             self.source.write_source_file(
-                revision.source_tree_id,
+                revision.id,
                 source["path"],
                 source["content"],
                 role=source["role"],
@@ -1127,11 +1095,8 @@ class PackageService:
             self._mapped(
                 id_map,
                 "ExperienceSurface",
-                (
-                    f"{source_surface['experience_revision_id']}:"
-                    f"{source_surface['surface_id']}"
-                ),
-                f"{created.experience_revision_id}:{created.surface_id}",
+                source_surface["id"],
+                created.id,
             )
 
     def _restore_data(
@@ -1454,27 +1419,11 @@ class PackageService:
                 GRAPH_METAMODEL_SCHEMA_FINGERPRINT,
             ),
         )
-        items = [
+        return [
             {"contract": name, "package": got, "current": expected}
             for name, got, expected in checks
             if got != expected
         ]
-        if self._definition_only_v4(manifest):
-            items = [
-                item
-                for item in items
-                if item["contract"]
-                not in {"graph_metamodel_version", "graph_schema_fingerprint"}
-            ]
-        return items
-
-    def _definition_only_v4(self, manifest: PackageManifest) -> bool:
-        return (
-            GRAPH_METAMODEL_VERSION == "n4x.graph.metamodel.v5"
-            and manifest.graph_metamodel_version == V4_GRAPH_METAMODEL_VERSION
-            and manifest.graph_schema_fingerprint == V4_GRAPH_SCHEMA_FINGERPRINT
-            and not manifest.include_data
-        )
 
     def _read_archive(
         self, archive_name: str
@@ -1651,8 +1600,8 @@ class PackageService:
         }
         action_revision_ids = {
             item.id
-            for item in self.records.action_revisions.values()
-            if item.application_revision_id in revision_ids
+            for revision_id in revision_ids
+            for item in self.bindings.action_revisions(revision_id)
         }
         job_ids = {
             item.id
@@ -1715,32 +1664,10 @@ class PackageService:
             lambda item: item.application_id == application_id,
         )
         self._delete_where(
-            self.records.test_cases,
-            lambda item: item.application_revision_id in revision_ids,
-        )
-        self._delete_where(
             self.records.validation_reports,
             lambda item: item.application_revision_id in revision_ids,
         )
         self._delete_owned_revision_runtime(revision_ids)
-        self._delete_where(
-            self.records.trigger_revisions,
-            lambda item: item.application_revision_id in revision_ids,
-        )
-        self._delete_where(
-            self.records.action_revisions,
-            lambda item: item.application_revision_id in revision_ids,
-        )
-        self._delete_where(
-            self.records.object_type_revisions,
-            lambda item: item.application_revision_id in revision_ids
-            or item.object_type_id in object_type_ids,
-        )
-        self._delete_where(
-            self.records.relation_type_revisions,
-            lambda item: item.application_revision_id in revision_ids
-            or item.relation_type_id in relation_type_ids,
-        )
         self._delete_where(
             self.records.triggers, lambda item: item.id in trigger_ids
         )
@@ -1762,10 +1689,6 @@ class PackageService:
             if item.experience_id == experience_id
         }
         self._delete_where(
-            self.records.experience_surfaces,
-            lambda item: item.experience_revision_id in revision_ids,
-        )
-        self._delete_where(
             self.records.experience_validation_reports,
             lambda item: item.experience_revision_id in revision_ids,
         )
@@ -1775,25 +1698,9 @@ class PackageService:
         self.records.experiences.delete(experience_id)
 
     def _delete_owned_revision_runtime(self, revision_ids: set[str]) -> None:
-        tree_ids = {
-            item.id
-            for item in self.records.source_trees.values()
-            if item.owner_id in revision_ids
-        }
-        self._delete_where(
-            self.records.source_changes,
-            lambda item: item.source_tree_id in tree_ids,
-        )
-        self._delete_where(
-            self.records.source_files,
-            lambda item: item.source_tree_id in tree_ids,
-        )
-        for tree_id in tree_ids:
-            self.records.source_trees.delete(tree_id)
-        self._delete_where(
-            self.records.runtime_dependencies,
-            lambda item: item.owner_id in revision_ids,
-        )
+        for tree in list(self.records.source_trees.values()):
+            if tree.status == "draft" and tree.owner_id in revision_ids:
+                self.records.source_trees.delete(tree.id)
         self._delete_where(
             self.records.python_environments,
             lambda item: item.application_revision_id in revision_ids,

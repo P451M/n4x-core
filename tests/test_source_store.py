@@ -4,27 +4,31 @@ import pytest
 
 from n4x.graph.repositories import _decode_json_values
 from n4x.kernel.errors import ImmutableRevisionError, SourceConflictError
+from n4x.kernel.intern import empty_tree_hash
 from n4x.kernel.models import Invocation, SourceFile
 from n4x.source_store.service import SourceUpdate
-from n4x.testing import create_test_runtime
+from n4x.testing import create_test_runtime, tree_id
 
 
 def test_source_store_writes_and_conflicts() -> None:
     system = create_test_runtime()
     app = system.create_application("notes", "Notes")
     revision = system.create_application_revision(app.id)
+    assert tree_id(system, revision) == empty_tree_hash()
 
     file = system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/create_note.py",
         "def run(ctx, input):\n    return input\n",
         role="action",
         language="python",
     )
+    assert tree_id(system, revision) == f"{revision.id}.source"
+    assert file.source_tree_id == f"{revision.id}.source"
 
     with pytest.raises(SourceConflictError):
         system.source.write_source_file(
-            revision.source_tree_id,
+            revision.id,
             "actions/create_note.py",
             "def run(ctx, input):\n    return {'bad': True}\n",
             role="action",
@@ -33,15 +37,15 @@ def test_source_store_writes_and_conflicts() -> None:
         )
 
     updated = system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/create_note.py",
         "def run(ctx, input):\n    return {'title': input['title']}\n",
         role="action",
         language="python",
         expected_hash=file.content_hash,
     )
-    assert updated.version == 2
-    assert len(system.source.inspect_source_changes(revision.source_tree_id)) == 2
+    assert updated.content_hash != file.content_hash
+    assert updated.source_tree_id == file.source_tree_id
 
 
 def test_apply_source_patch_applies_strict_unified_diff() -> None:
@@ -49,7 +53,7 @@ def test_apply_source_patch_applies_strict_unified_diff() -> None:
     app = system.create_application("patched", "Patched")
     revision = system.create_application_revision(app.id)
     source = system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/run.py",
         "def run():\n    first()\n    second()\n    third()\n",
         role="action",
@@ -57,7 +61,7 @@ def test_apply_source_patch_applies_strict_unified_diff() -> None:
     )
 
     updated = system.source.apply_source_patch(
-        revision.source_tree_id,
+        revision.id,
         "actions/run.py",
         (
             "--- a/actions/run.py\n"
@@ -85,7 +89,7 @@ def test_apply_source_patch_preserves_no_final_newline() -> None:
     app = system.create_application("no-newline", "No newline")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "value.txt",
         "old",
         role="helper",
@@ -93,7 +97,7 @@ def test_apply_source_patch_preserves_no_final_newline() -> None:
     )
 
     updated = system.source.apply_source_patch(
-        revision.source_tree_id,
+        revision.id,
         "value.txt",
         (
             "@@ -1 +1 @@\n"
@@ -112,7 +116,7 @@ def test_apply_source_patch_matches_unique_context_without_line_numbers() -> Non
     app = system.create_application("context", "Context")
     revision = system.create_application_revision(app.id)
     source = system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "mail.tsx",
         "alpha\nclassName=\"keep\"\nbeta\nclassName=\"old\"\ngamma\n",
         role="helper",
@@ -120,7 +124,7 @@ def test_apply_source_patch_matches_unique_context_without_line_numbers() -> Non
     )
 
     updated = system.source.apply_source_patch(
-        revision.source_tree_id,
+        revision.id,
         "mail.tsx",
         "@@\n-className=\"old\"\n+className=\"new\"\n",
         expected_hash=source.content_hash,
@@ -136,7 +140,7 @@ def test_apply_source_patch_uses_line_numbers_as_hint_when_context_moved() -> No
     app = system.create_application("hint", "Hint")
     revision = system.create_application_revision(app.id)
     source = system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "mail.tsx",
         "one\ntwo\nunique-target\nthree\n",
         role="helper",
@@ -144,7 +148,7 @@ def test_apply_source_patch_uses_line_numbers_as_hint_when_context_moved() -> No
     )
 
     updated = system.source.apply_source_patch(
-        revision.source_tree_id,
+        revision.id,
         "mail.tsx",
         "@@ -1,1 +1,1 @@\n-unique-target\n+replaced\n",
         expected_hash=source.content_hash,
@@ -158,7 +162,7 @@ def test_apply_source_patch_conflicts_when_context_is_ambiguous() -> None:
     app = system.create_application("ambiguous", "Ambiguous")
     revision = system.create_application_revision(app.id)
     original = system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "mail.tsx",
         "className=\"dup\"\nmiddle\nclassName=\"dup\"\n",
         role="helper",
@@ -167,7 +171,7 @@ def test_apply_source_patch_conflicts_when_context_is_ambiguous() -> None:
 
     with pytest.raises(SourceConflictError) as captured:
         system.source.apply_source_patch(
-            revision.source_tree_id,
+            revision.id,
             "mail.tsx",
             "@@\n-className=\"dup\"\n+className=\"one\"\n",
             expected_hash=original.content_hash,
@@ -176,17 +180,17 @@ def test_apply_source_patch_conflicts_when_context_is_ambiguous() -> None:
     assert captured.value.path == "mail.tsx"
     assert captured.value.current_hash == original.content_hash
     assert captured.value.failing_hunk is not None
-    current = system.source.read_source_file(revision.source_tree_id, "mail.tsx")
+    current = system.source.read_source_file(tree_id(system, revision), "mail.tsx")
     assert current.content == original.content
 
     with pytest.raises(SourceConflictError):
         system.source.apply_source_patch(
-            revision.source_tree_id,
+            revision.id,
             "mail.tsx",
             "@@ -1,1 +1,1 @@\n-className=\"dup\"\n+className=\"one\"\n",
             expected_hash=original.content_hash,
         )
-    current = system.source.read_source_file(revision.source_tree_id, "mail.tsx")
+    current = system.source.read_source_file(tree_id(system, revision), "mail.tsx")
     assert current.content == original.content
 
 
@@ -195,37 +199,40 @@ def test_search_source_tree_and_ranged_read() -> None:
     app = system.create_application("search", "Search")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "mail.tsx",
         "overflow-hidden\nkeep\noverflow-auto\n",
         role="helper",
         language="typescript",
     )
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "sidebar.tsx",
         "overflow-hidden\n",
         role="helper",
         language="typescript",
     )
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "notes.py",
         "overflow-hidden\n",
         role="helper",
         language="python",
     )
+    current = tree_id(system, revision)
 
     matches = system.source.search_source_tree(
-        revision.source_tree_id, r"overflow-hidden", glob="*.tsx"
+        current, r"overflow-hidden", glob="*.tsx"
     )
     assert {(item["path"], item["line"]) for item in matches} == {
         ("mail.tsx", 1),
         ("sidebar.tsx", 1),
     }
+    assert matches[0]["before"] == []
+    assert matches[0]["after"] == ["keep", "overflow-auto"]
 
     ranged = system.source.read_source_file_range(
-        revision.source_tree_id, "mail.tsx", offset=2, limit=1
+        current, "mail.tsx", offset=2, limit=1
     )
     assert ranged["content"] == "keep\n"
     assert ranged["total_lines"] == 3
@@ -245,7 +252,7 @@ def test_apply_source_patch_rejects_conflicts_without_writing(patch: str) -> Non
     app = system.create_application("conflict", "Conflict")
     revision = system.create_application_revision(app.id)
     original = system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "value.txt",
         "original\n",
         role="helper",
@@ -254,27 +261,27 @@ def test_apply_source_patch_rejects_conflicts_without_writing(patch: str) -> Non
 
     with pytest.raises(SourceConflictError):
         system.source.apply_source_patch(
-            revision.source_tree_id,
+            revision.id,
             "value.txt",
             patch,
             expected_hash=original.content_hash,
         )
 
-    current = system.source.read_source_file(revision.source_tree_id, "value.txt")
+    current = system.source.read_source_file(tree_id(system, revision), "value.txt")
     assert current.content == original.content
-    assert current.version == original.version
+    assert current.content_hash == original.content_hash
 
 
 def test_batch_update_is_atomic() -> None:
     system = create_test_runtime()
     app = system.create_application("tasks", "Tasks")
     revision = system.create_application_revision(app.id)
-    trees = system.uow.records.source_trees
-    initial_tree_hash = trees[revision.source_tree_id].tree_hash
+    initial_tree_id = tree_id(system, revision)
+    initial_tree_hash = system.uow.records.source_trees[initial_tree_id].tree_hash
 
     with pytest.raises(SourceConflictError):
-        system.source.batch_update_source_files(
-            revision.source_tree_id,
+        system.source.batch_update_revision(
+            revision.id,
             [
                 SourceUpdate(
                     "write",
@@ -288,51 +295,73 @@ def test_batch_update_is_atomic() -> None:
             expected_tree_hash=initial_tree_hash,
         )
 
-    assert system.source.list_source_tree(revision.source_tree_id) == []
+    assert system.source.list_source_tree(tree_id(system, revision)) == []
+    assert tree_id(system, revision) == initial_tree_id
     assert (
-        trees[revision.source_tree_id].tree_hash
+        system.uow.records.source_trees[initial_tree_id].tree_hash
         == initial_tree_hash
     )
 
 
-def test_immutable_snapshot_rejects_source_writes() -> None:
+def test_intern_tree_rejects_direct_writes_and_shares_identical_listings() -> None:
     system = create_test_runtime()
     app = system.create_application("tasks", "Tasks")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/hello.py",
         "def run(ctx, input): return {'ok': True}",
         role="action",
         language="python",
     )
-    snapshot = system.source.snapshot_tree(revision.source_tree_id, revision.id)
+    interned = system.source.intern_tree(revision.id)
 
     with pytest.raises(ImmutableRevisionError):
-        system.source.write_source_file(
-            snapshot.id,
-            "actions/hello.py",
-            "def run(ctx, input): return {'ok': False}",
-            role="action",
-            language="python",
+        system.source._batch_update_working_tree(
+            interned.id,
+            [
+                SourceUpdate(
+                    "write",
+                    "actions/hello.py",
+                    content="def run(ctx, input): return {'ok': False}",
+                    role="action",
+                    language="python",
+                )
+            ],
         )
 
-
-def test_clone_tree_to_draft_copies_graph_source_without_reusing_snapshot() -> None:
-    system = create_test_runtime()
-    app = system.create_application("tasks", "Tasks")
-    revision = system.create_application_revision(app.id)
-    original = system.source.write_source_file(
-        revision.source_tree_id,
+    sibling = system.create_application("other", "Other")
+    other = system.create_application_revision(sibling.id)
+    system.source.write_source_file(
+        other.id,
         "actions/hello.py",
         "def run(ctx, input): return {'ok': True}",
         role="action",
         language="python",
     )
-    snapshot = system.source.snapshot_tree(revision.source_tree_id, revision.id)
+    other_interned = system.source.intern_tree(other.id)
+    assert other_interned.id == interned.id
+    assert tree_id(system, revision) == interned.id
+    assert f"{revision.id}.source" not in system.uow.records.source_trees
 
-    draft = system.source.clone_tree_to_draft(snapshot.id, app.id, "tasks@2")
-    copied = system.source.read_source_file(draft.id, "actions/hello.py")
+
+def test_first_write_copy_on_writes_from_interned_parent() -> None:
+    system = create_test_runtime()
+    app = system.create_application("tasks", "Tasks")
+    first = system.create_application_revision(app.id)
+    original = system.source.write_source_file(
+        first.id,
+        "actions/hello.py",
+        "def run(ctx, input): return {'ok': True}",
+        role="action",
+        language="python",
+    )
+    interned = system.source.intern_tree(first.id)
+    system.activate_application_revision(first.id)
+
+    draft = system.create_application_revision(app.id)
+    assert tree_id(system, draft) == interned.id
+    copied = system.source.read_source_file(tree_id(system, draft), "actions/hello.py")
     updated = system.source.write_source_file(
         draft.id,
         "actions/hello.py",
@@ -341,12 +370,12 @@ def test_clone_tree_to_draft_copies_graph_source_without_reusing_snapshot() -> N
         language="python",
     )
 
-    assert draft.status == "draft"
+    assert tree_id(system, draft) == f"{draft.id}.source"
     assert copied.content == original.content
     assert copied.content_hash == original.content_hash
     assert updated.content_hash != original.content_hash
     assert (
-        system.source.read_source_file(snapshot.id, "actions/hello.py").content
+        system.source.read_source_file(interned.id, "actions/hello.py").content
         == original.content
     )
 
@@ -357,18 +386,17 @@ def test_source_file_json_object_content_round_trips() -> None:
     revision = system.create_experience_revision(experience.id, ui_profile="none")
     payload = '{"name":"Office","display":"standalone"}'
     written = system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "public/manifest.webmanifest",
         payload,
         role="surface",
         language="json",
     )
-    read = system.source.read_source_file(
-        revision.source_tree_id, "public/manifest.webmanifest"
-    )
+    current = tree_id(system, revision)
+    read = system.source.read_source_file(current, "public/manifest.webmanifest")
     listed = {
         item.path: item
-        for item in system.source.list_source_tree(revision.source_tree_id)
+        for item in system.source.list_source_tree(current)
     }
     assert written.content == payload
     assert read.content == payload

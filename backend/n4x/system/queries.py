@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from n4x.graph.bindings import RevisionBindings
 from n4x.graph.uow import GraphUnitOfWork
 from n4x.kernel.models import (
     Application,
@@ -27,6 +28,7 @@ class QueryService:
     ) -> None:
         self.uow = uow
         self.records = uow.records
+        self.bindings = RevisionBindings(uow)
 
     def refresh(self) -> None:
         # Repository reads are live; there is no process-local state to refresh.
@@ -65,12 +67,7 @@ class QueryService:
         self, experience_revision_id: str
     ) -> list[RuntimeDependency]:
         return sorted(
-            (
-                item
-                for item in self.records.runtime_dependencies.values()
-                if item.owner_kind == "ExperienceRevision"
-                and item.owner_id == experience_revision_id
-            ),
+            self.bindings.dependencies(experience_revision_id),
             key=lambda item: (item.package, item.id),
         )
 
@@ -91,11 +88,7 @@ class QueryService:
         self, experience_revision_id: str
     ) -> list[ExperienceSurface]:
         return sorted(
-            (
-                item
-                for item in self.records.experience_surfaces.values()
-                if item.experience_revision_id == experience_revision_id
-            ),
+            self.bindings.surfaces(experience_revision_id),
             key=lambda item: item.surface_id,
         )
 

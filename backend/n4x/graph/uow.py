@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import wraps
@@ -19,7 +20,9 @@ from n4x.graph.repositories import (
     SourceRepository,
 )
 from n4x.graph.store import GraphStore, node_ref
-from n4x.kernel.errors import GraphUnitOfWorkError
+from n4x.kernel.errors import GraphUnitOfWorkError, TransientGraphConflictError
+
+_DEADLOCK_ATTEMPTS = 8
 
 
 @dataclass
@@ -156,9 +159,18 @@ def transactional(method):
     @wraps(method)
     def wrapper(self, *args, **kwargs):
         outermost = not self.uow.is_active
-        with self.uow:
-            if outermost:
-                self.uow.store.acquire_write_lock(node_ref("N4XRoot", id="n4x"))
-            return method(self, *args, **kwargs)
+        if not outermost:
+            with self.uow:
+                return method(self, *args, **kwargs)
+        for attempt in range(_DEADLOCK_ATTEMPTS):
+            try:
+                with self.uow:
+                    self.uow.store.acquire_write_lock(node_ref("N4XRoot", id="n4x"))
+                    return method(self, *args, **kwargs)
+            except TransientGraphConflictError:
+                if attempt == _DEADLOCK_ATTEMPTS - 1:
+                    raise
+                time.sleep(0.01 * (2**attempt))
+        raise AssertionError("unreachable deadlock retry")
 
     return wrapper

@@ -57,7 +57,7 @@ class McpAuthoringHarness:
         for path, content in source_files.items():
             self.run(
                 "write_source_file",
-                source_tree_id=revision["source_tree_id"],
+                revision_id=revision["id"],
                 path=path,
                 role="surface",
                 language="typescript",

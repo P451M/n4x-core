@@ -13,7 +13,7 @@ def test_system_runs_draft_action_and_records_callback() -> None:
         runtime.applications.create("mail", "Mail")
         draft = runtime.applications.create_revision("mail")
         runtime.source.write_source_file(
-            draft.source_tree_id,
+            draft.id,
             "actions/echo.py",
             "def run(ctx, input):\n    return {'value': input['value']}\n",
             role="action",
@@ -27,10 +27,10 @@ def test_system_runs_draft_action_and_records_callback() -> None:
             source_paths=["actions/echo.py"],
         )
         runtime.definitions.create_test_case(
-            draft.id, action.id, {"value": "ok"}, {"value": "ok"}
+            draft.id, action.action_id, {"value": "ok"}, {"value": "ok"}
         )
         invocation = runtime.invocations.run_draft_action(
-            action.id, {"value": "ok"}
+            draft.id, action.action_id, {"value": "ok"}
         )
         assert invocation.status == "succeeded"
         assert invocation.output == {"value": "ok"}

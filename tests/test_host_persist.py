@@ -11,7 +11,9 @@ def test_host_persists_system_revision_in_graph(tmp_path: Path) -> None:
         revision = host.boot_active()
         stored = host.system_graph.get_revision(revision.id)
         assert stored.content_root.startswith("sha256:")
-        assert stored.source_tree_id == revision.source_tree_id
+        assert host.system_graph.tree_id(stored.id) == host.system_graph.tree_id(
+            revision.id
+        )
         enabled = host.system_graph.enabled_revision()
         assert enabled is not None
         assert enabled.id == revision.id

@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 
 from n4x.contracts.action_context import ACTION_CONTEXT_VERSION
+from n4x.graph.bindings import RevisionBindings
 from n4x.graph.store import GraphStore, node_ref
 from n4x.graph.uow import GraphUnitOfWork
 from n4x.host.archive import read_official_archive
@@ -36,6 +37,10 @@ class SystemGraph:
         self.store = store
         self.uow = GraphUnitOfWork(store)
         self.source = SourceStore(store, self.uow)
+        self.bindings = RevisionBindings(self.uow)
+
+    def tree_id(self, revision_id: str) -> str:
+        return self.bindings.tree_id(revision_id)
 
     def ensure_platform_system(self) -> PlatformSystem:
         with self.uow:
@@ -119,26 +124,9 @@ class SystemGraph:
     ) -> SystemRevision:
         with self.uow:
             system = self.ensure_platform_system()
-            tree = self.source.create_tree(
-                "n4x",
-                revision_id,
-                status="draft",
-                owner_kind="SystemRevision",
-            )
-            for path, blob in sorted(files.items()):
-                self.source.write_source_file(
-                    tree.id,
-                    path,
-                    blob.decode("utf-8"),
-                    role=_role_for(path),
-                    language=_language_for(path),
-                    actor="host",
-                    tool="import_official_archive",
-                )
             revision = SystemRevision(
                 id=revision_id,
                 system_id=PLATFORM_SYSTEM_ID,
-                source_tree_id=tree.id,
                 content_root=content_root,
                 host_abi=HOST_ADAPTER,
                 action_context=ACTION_CONTEXT_VERSION,
@@ -147,11 +135,25 @@ class SystemGraph:
             )
             self.uow.systems.save_revision(revision)
             self.uow.systems.attach_revision(PLATFORM_SYSTEM_ID, revision.id)
+            tree = self.source.create_working_tree(
+                revision.id, owner_kind="SystemRevision"
+            )
             self.store.create_edge(
                 node_ref("SystemRevision", id=revision.id),
                 "HAS_SOURCE_TREE",
                 node_ref("SourceTree", id=tree.id),
             )
+            for path, blob in sorted(files.items()):
+                self.source.write_source_file(
+                    revision.id,
+                    path,
+                    blob.decode("utf-8"),
+                    role=_role_for(path),
+                    language=_language_for(path),
+                    actor="host",
+                    tool="import_official_archive",
+                )
+            tree = self.source.intern_tree(revision.id)
             if enable:
                 self.uow.systems.replace_active_revision(
                     PLATFORM_SYSTEM_ID,

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
+from n4x.graph.bindings import RevisionBindings
+from n4x.graph.intern_gc import delete_interned_orphans
 from n4x.graph.store import node_ref
 from n4x.graph.uow import GraphUnitOfWork
 from n4x.kernel.errors import ConcurrentGraphUpdateError, ValidationFailure
@@ -15,12 +16,18 @@ from n4x.kernel.models import (
     RuntimeDependency,
     SourceFileSummary,
     UiProfile,
-    now_utc,
 )
 from n4x.graph.service_base import transactional
 from n4x.source_store.service import SourceStore
+from n4x.system.applications import upsert_runtime_dependency
 from n4x.system.drafts import Drafts
 from n4x.system.surfaces import Surfaces
+
+EXPERIENCE_COPY_EDGES = (
+    "HAS_SOURCE_TREE",
+    "DECLARES_DEPENDENCY",
+    "DECLARES_SURFACE",
+)
 
 
 class Experiences:
@@ -31,6 +38,7 @@ class Experiences:
         self.source = source
         self.drafts = Drafts(self.records)
         self.surfaces = Surfaces(uow, source)
+        self.bindings = RevisionBindings(uow)
 
     @transactional
     def create(
@@ -67,21 +75,24 @@ class Experiences:
         )
         return {
             "experience": experience.model_dump(mode="json"),
-            "revisions": [revision.model_dump(mode="json") for revision in revisions],
+            "revisions": [
+                self.bindings.payload(revision.id) for revision in revisions
+            ],
         }
 
     def inspect_revision(self, experience_revision_id: str) -> dict[str, Any]:
         revision = self.records.experience_revisions[experience_revision_id]
+        tree_id = self.bindings.tree_id(revision.id)
         current = {
             item.path: item.content_hash
-            for item in self.source.list_source_tree(revision.source_tree_id)
+            for item in self.source.list_source_tree(tree_id)
         }
         previous: dict[str, str] = {}
         if revision.parent_revision_id is not None:
-            parent = self.records.experience_revisions[revision.parent_revision_id]
+            parent_tree_id = self.bindings.tree_id(revision.parent_revision_id)
             previous = {
                 item.path: item.content_hash
-                for item in self.source.list_source_tree(parent.source_tree_id)
+                for item in self.source.list_source_tree(parent_tree_id)
             }
         dirty_paths = sorted(
             {
@@ -91,7 +102,7 @@ class Experiences:
             }
             | {path for path in previous if path not in current}
         )
-        revision_payload = revision.model_dump(mode="json")
+        revision_payload = self.bindings.payload(revision.id)
         for row in revision_payload["application_access"]:
             application = self.records.applications.get(row["application_id"])
             row["active_revision_id"] = (
@@ -101,14 +112,12 @@ class Experiences:
             "revision": revision_payload,
             "source_files": [
                 SourceFileSummary.from_source_file(item).model_dump(mode="json")
-                for item in self.source.list_source_tree(revision.source_tree_id)
+                for item in self.source.list_source_tree(tree_id)
             ],
             "dirty_paths": dirty_paths,
             "dependencies": [
                 item.model_dump(mode="json")
-                for item in self.records.runtime_dependencies.values()
-                if item.owner_kind == "ExperienceRevision"
-                and item.owner_id == revision.id
+                for item in self.bindings.dependencies(revision.id)
             ],
             "surfaces": [
                 item.model_dump(mode="json")
@@ -156,15 +165,23 @@ class Experiences:
         *,
         created_by: str = "system",
         ui_profile: UiProfile | None = None,
+        parent_revision_id: str | None = None,
         application_access: list[ApplicationAccessDeclaration | dict[str, Any]]
         | None = None,
     ) -> ExperienceRevision:
         experience = self.records.experiences[experience_id]
-        revision_id = (
-            f"{experience_id}.experience@"
-            f"{len(self.uow.experiences.list_revisions(experience_id)) + 1}"
-        )
-        parent = self._resolve_parent(experience)
+        draft = self._draft(experience.id)
+        if draft is not None:
+            if parent_revision_id is None or parent_revision_id in {
+                draft.id,
+                draft.parent_revision_id,
+            }:
+                return draft
+            raise ValidationFailure(
+                f"Experience {experience_id} already has draft {draft.id}; "
+                "call discard_experience_revision to start from a different parent"
+            )
+        parent = self._resolve_parent(experience, parent_revision_id)
         access = [
             item
             if isinstance(item, ApplicationAccessDeclaration)
@@ -178,24 +195,13 @@ class Experiences:
             )
         ]
         self._validate_access_declarations(access)
-        tree = (
-            self.source.clone_tree_to_draft(
-                parent.source_tree_id,
-                experience_id,
-                revision_id,
-                owner_kind="ExperienceRevision",
-            )
-            if parent is not None
-            else self.source.create_tree(
-                experience_id,
-                revision_id,
-                owner_kind="ExperienceRevision",
-            )
+        revision_id = (
+            f"{experience_id}.experience@"
+            f"{len(self.uow.experiences.list_revisions(experience_id)) + 1}"
         )
         revision = ExperienceRevision(
             id=revision_id,
             experience_id=experience_id,
-            source_tree_id=tree.id,
             parent_revision_id=None if parent is None else parent.id,
             ui_profile=(
                 ui_profile
@@ -209,20 +215,37 @@ class Experiences:
         )
         self.uow.experiences.save_revision(revision)
         self.uow.experiences.attach_revision(experience_id, revision.id)
-        self.store.create_edge(
-            node_ref("ExperienceRevision", id=revision.id),
-            "HAS_SOURCE_TREE",
-            node_ref("SourceTree", id=tree.id),
-        )
         if parent is not None:
             self.store.create_edge(
                 node_ref("ExperienceRevision", id=revision.id),
                 "PARENT_REVISION",
                 node_ref("ExperienceRevision", id=parent.id),
             )
-            self._clone_frontend(parent, revision)
+            self.bindings.copy_edges(parent.id, revision.id, EXPERIENCE_COPY_EDGES)
+        else:
+            self.bindings.set_tree(revision.id, self.source.interned_empty_tree().id)
         self._link_access(revision)
         return revision
+
+    @transactional
+    def discard_revision(self, experience_revision_id: str) -> None:
+        revision = self.drafts.require_experience(experience_revision_id)
+        tree = self.bindings.tree(revision.id)
+        revision_ref = node_ref("ExperienceRevision", id=revision.id)
+        seen: set[str] = set()
+        for edge in list(self.store.list_edges(revision_ref)):
+            if edge.type not in seen:
+                self.store.delete_edge(revision_ref, edge.type)
+                seen.add(edge.type)
+        self.store.delete_edge(
+            node_ref("Experience", id=revision.experience_id),
+            "HAS_REVISION",
+            revision_ref,
+        )
+        if tree.status == "draft" and tree.owner_id == revision.id:
+            self.source.delete_working_tree(tree.id)
+        self.records.experience_revisions.delete(revision.id)
+        delete_interned_orphans(self.uow)
 
     @transactional
     def set_application_access(
@@ -258,51 +281,14 @@ class Experiences:
                 "ExperienceRevision dependencies must use the javascript "
                 "ecosystem; declare Python dependencies on an ApplicationRevision"
             )
-        dependency = RuntimeDependency(
-            id=str(uuid.uuid4()),
-            owner_kind="ExperienceRevision",
-            owner_id=experience_revision_id,
+        return upsert_runtime_dependency(
+            self.uow,
+            self.bindings,
+            experience_revision_id,
             ecosystem="javascript",
             package=package,
             spec=spec,
         )
-        self.records.runtime_dependencies.save(dependency)
-        self._link_dependency(dependency)
-        return dependency
-
-    def _clone_frontend(
-        self, parent: ExperienceRevision, draft: ExperienceRevision
-    ) -> None:
-        for dependency in self.records.runtime_dependencies.values():
-            if (
-                dependency.owner_kind != "ExperienceRevision"
-                or dependency.owner_id != parent.id
-                or dependency.ecosystem != "javascript"
-            ):
-                continue
-            clone = dependency.model_copy(
-                update={
-                    "id": str(uuid.uuid4()),
-                    "owner_id": draft.id,
-                    "created_at": now_utc(),
-                }
-            )
-            self.records.runtime_dependencies.save(clone)
-            self._link_dependency(clone)
-
-        for surface in self.records.experience_surfaces.values():
-            if surface.experience_revision_id != parent.id:
-                continue
-            clone = surface.model_copy(
-                update={
-                    "experience_revision_id": draft.id,
-                    "source_tree_id": draft.source_tree_id,
-                    "created_at": now_utc(),
-                    "created_by": "revision_clone",
-                }
-            )
-            self.records.experience_surfaces.save(clone)
-            self.surfaces.relink(clone)
 
     def _validate_access_declarations(
         self, declarations: list[ApplicationAccessDeclaration]
@@ -341,18 +327,28 @@ class Experiences:
                             f"invalid {kind} access declaration: {identifier}"
                         )
 
-    def _resolve_parent(self, experience: Experience) -> ExperienceRevision | None:
+    def _draft(self, experience_id: str) -> ExperienceRevision | None:
         drafts = [
             revision
-            for revision in self.uow.experiences.list_revisions(experience.id)
+            for revision in self.uow.experiences.list_revisions(experience_id)
             if revision.status == "draft"
         ]
-        if drafts:
-            return max(drafts, key=lambda revision: revision.created_at)
+        if not drafts:
+            return None
+        return max(drafts, key=lambda revision: revision.created_at)
+
+    def _resolve_parent(
+        self, experience: Experience, parent_revision_id: str | None
+    ) -> ExperienceRevision | None:
+        if parent_revision_id is not None:
+            parent = self.records.experience_revisions.get(parent_revision_id)
+            if parent is None or parent.experience_id != experience.id:
+                raise ValidationFailure(
+                    f"unknown parent revision: {parent_revision_id}"
+                )
+            return parent
         if experience.active_revision_id:
-            return self.records.experience_revisions.get(
-                experience.active_revision_id
-            )
+            return self.records.experience_revisions.get(experience.active_revision_id)
         return None
 
     def _link_access(self, revision: ExperienceRevision) -> None:
@@ -364,10 +360,3 @@ class Experiences:
                 "USES_APPLICATION",
                 node_ref("Application", id=access.application_id),
             )
-
-    def _link_dependency(self, dependency: RuntimeDependency) -> None:
-        self.store.create_edge(
-            node_ref("ExperienceRevision", id=dependency.owner_id),
-            "DECLARES_DEPENDENCY",
-            node_ref("RuntimeDependency", id=dependency.id),
-        )

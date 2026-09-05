@@ -75,6 +75,13 @@ class BlueprintDefinitionPort(Protocol):
 
     def create_trigger(self, *args, **kwargs) -> TriggerRevision: ...
 
+    def create_test_case(
+        self,
+        application_revision_id: str,
+        action_id: str,
+        input_value: dict[str, Any],
+        expected_output: Any,
+    ) -> TestCase: ...
 
 
 class BlueprintExperiencePort(Protocol):
@@ -105,16 +112,6 @@ class BlueprintExperienceSurfacePort(Protocol):
     def create(self, *args, **kwargs): ...
 
 
-class BlueprintInvocationPort(Protocol):
-    def create_test_case(
-        self,
-        application_revision_id: str,
-        action_revision_id: str,
-        input_value: dict[str, Any],
-        expected_output: Any,
-    ) -> TestCase: ...
-
-
 class BlueprintSourcePort(Protocol):
     def write_source_file(self, *args, **kwargs): ...
 
@@ -131,7 +128,6 @@ class BlueprintService:
         definitions: BlueprintDefinitionPort,
         experiences: BlueprintExperiencePort,
         experience_surfaces: BlueprintExperienceSurfacePort,
-        invocations: BlueprintInvocationPort,
     ) -> None:
         self.uow = uow
         self.store = uow.store
@@ -142,7 +138,6 @@ class BlueprintService:
         self.definitions = definitions
         self.experiences = experiences
         self.experience_surfaces = experience_surfaces
-        self.invocations = invocations
 
     @transactional
     def create(
@@ -283,7 +278,7 @@ class BlueprintService:
             dependencies[key] = created.id
         for source_file in content.get("source_files", []):
             self.source.write_source_file(
-                revision.source_tree_id,
+                revision.id,
                 source_file["path"],
                 source_file["content"],
                 role=source_file["role"],
@@ -330,7 +325,7 @@ class BlueprintService:
                 revision.id,
                 trigger["id"],
                 trigger_type=trigger["trigger_type"],
-                action_revision_id=action_ids[trigger["action_id"]],
+                action_id=trigger["action_id"],
                 config=trigger.get("config", {}),
                 input_template=trigger.get("input_template", {}),
                 overlap_policy=trigger.get("overlap_policy"),
@@ -342,9 +337,9 @@ class BlueprintService:
             trigger_ids[trigger["id"]] = created.id
         test_ids = []
         for test in content.get("tests", []):
-            created = self.invocations.create_test_case(
+            created = self.definitions.create_test_case(
                 revision.id,
-                action_ids[test["action_id"]],
+                test["action_id"],
                 test.get("input", {}),
                 test.get("expected_output"),
             )
@@ -387,7 +382,7 @@ class BlueprintService:
                 experience_dependencies[key] = created.id
             for source_file in definition.source_files:
                 self.source.write_source_file(
-                    experience_revision.source_tree_id,
+                    experience_revision.id,
                     source_file.path,
                     source_file.content,
                     role=source_file.role,
@@ -411,13 +406,13 @@ class BlueprintService:
                 experience_surfaces.append(created.surface_id)
             experience_results[definition.id] = {
                 "experience_revision_id": experience_revision.id,
-                "source_tree_id": experience_revision.source_tree_id,
+                "source_tree_id": self.source.bindings.tree_id(experience_revision.id),
                 "surface_ids": experience_surfaces,
             }
         return {
             "application_id": application_id,
             "application_revision_id": revision.id,
-            "source_tree_id": revision.source_tree_id,
+            "source_tree_id": self.source.bindings.tree_id(revision.id),
             "action_revision_ids": action_ids,
             "trigger_revision_ids": trigger_ids,
             "test_ids": test_ids,

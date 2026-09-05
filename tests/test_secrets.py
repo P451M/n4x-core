@@ -16,7 +16,7 @@ def test_secret_metadata_excludes_values_and_actions_can_read_declared_secret() 
     )
     system.secrets.set_secret(reference.uri, "very-secret-value")
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/read_secret.py",
         (
             "def run(ctx, input):\n"
@@ -36,7 +36,7 @@ def test_secret_metadata_excludes_values_and_actions_can_read_declared_secret() 
         secret_ref_ids=[reference.id],
     )
 
-    invocation = system.run_draft_action(action.id, {})
+    invocation = system.run_draft_action(revision.id, action.action_id, {})
 
     assert invocation.status == "succeeded"
     assert invocation.output == {"length": 17, "value": "[REDACTED]"}
@@ -58,7 +58,7 @@ def test_action_cannot_read_undeclared_secret() -> None:
     )
     system.secrets.set_secret(reference.uri, "very-secret-value")
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/read_secret.py",
         (
             "def run(ctx, input):\n"
@@ -75,7 +75,7 @@ def test_action_cannot_read_undeclared_secret() -> None:
         source_paths=["actions/read_secret.py"],
     )
 
-    invocation = system.run_draft_action(action.id, {})
+    invocation = system.run_draft_action(revision.id, action.action_id, {})
 
     assert invocation.status == "failed"
     assert "KeyError" in invocation.error
@@ -90,7 +90,7 @@ def test_activation_import_check_does_not_require_secret_value() -> None:
         app.id, "secret://secret-later/provider-password"
     )
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/provider.py",
         (
             "def run_local(ctx, input):\n"

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from n4x.graph.bindings import RevisionBindings
 from n4x.graph.store import GraphStore, node_ref
 from n4x.graph.uow import GraphUnitOfWork
 from n4x.kernel.errors import ValidationFailure
@@ -80,20 +81,22 @@ class ExperienceSurfaceRuntime:
         self.uow = uow or GraphUnitOfWork(graph_store)
         self.graph = self.uow.records
         self.theme_provider = theme_provider
+        self.bindings = RevisionBindings(self.uow)
 
-    def build(self, surface: ExperienceSurface) -> SurfaceBuildResult:
+    def build(
+        self, experience_revision_id: str, surface: ExperienceSurface
+    ) -> SurfaceBuildResult:
         self.uow.require_inactive("build Experience Surface artifact")
-        experience_revision_id = surface.experience_revision_id
         with self.uow:
             dependencies = self._javascript_dependencies(experience_revision_id)
             ui_context = self._ui_context(experience_revision_id)
+            tree_id = self.bindings.tree_id(experience_revision_id)
             source_files = [
-                self.source.read_source_file(
-                    surface.source_tree_id, source_path
-                )
+                self.source.read_source_file(tree_id, source_path)
                 for source_path in surface.source_paths
             ]
             input_hash = self._build_fingerprint(
+                experience_revision_id,
                 surface,
                 dependencies,
                 ui_context,
@@ -350,15 +353,6 @@ class ExperienceSurfaceRuntime:
             self.store.create_edge(
                 node_ref(artifact.owner_kind, id=artifact.owner_id),
                 "HAS_BUILD_ARTIFACT",
-                node_ref("BuildArtifact", id=artifact.id),
-            )
-            self.store.create_edge(
-                node_ref(
-                    "ExperienceSurface",
-                    experience_revision_id=surface.experience_revision_id,
-                    surface_id=surface.surface_id,
-                ),
-                "BUILDS_TO",
                 node_ref("BuildArtifact", id=artifact.id),
             )
             self.store.create_edge(
@@ -620,31 +614,29 @@ class ExperienceSurfaceRuntime:
     ) -> list[RuntimeDependency]:
         dependencies = [
             dependency
-            for dependency in self.graph.runtime_dependencies.values()
-            if dependency.owner_kind == "ExperienceRevision"
-            and dependency.owner_id == experience_revision_id
-            and dependency.ecosystem == "javascript"
+            for dependency in self.bindings.dependencies(experience_revision_id)
+            if dependency.ecosystem == "javascript"
         ]
         return sorted(
             dependencies,
             key=lambda dependency: (dependency.package, dependency.spec, dependency.id),
         )
 
-    def build_input_hash(self, surface: ExperienceSurface) -> str:
+    def build_input_hash(
+        self, experience_revision_id: str, surface: ExperienceSurface
+    ) -> str:
         with self.uow:
-            ui_context = self._ui_context(
-                surface.experience_revision_id
-            )
+            ui_context = self._ui_context(experience_revision_id)
             return self._build_fingerprint(
+                experience_revision_id,
                 surface,
-                self._javascript_dependencies(
-                    surface.experience_revision_id
-                ),
+                self._javascript_dependencies(experience_revision_id),
                 ui_context,
             )
 
     def _build_fingerprint(
         self,
+        experience_revision_id: str,
         surface: ExperienceSurface,
         dependencies: list[RuntimeDependency],
         ui_context: SurfaceUiContext,
@@ -652,15 +644,14 @@ class ExperienceSurfaceRuntime:
         source_hashes: list[str] | list[dict[str, str]] | None = None,
     ) -> str:
         if source_hashes is None:
+            tree_id = self.bindings.tree_id(experience_revision_id)
             source_hashes = [
-                self.source.read_source_file(
-                    surface.source_tree_id, path
-                ).content_hash
+                self.source.read_source_file(tree_id, path).content_hash
                 for path in surface.source_paths
             ]
         return sha256_json(
             {
-                "experience_revision_id": surface.experience_revision_id,
+                "experience_revision_id": experience_revision_id,
                 "surface_id": surface.surface_id,
                 "surface_type": surface.surface_type,
                 "surface_type_version": surface.surface_type_version,

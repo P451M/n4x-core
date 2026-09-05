@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from n4x.graph.bindings import RevisionBindings
 from n4x.graph.store import node_ref
 from n4x.graph.uow import GraphUnitOfWork
+from n4x.kernel.intern import experience_surface_id
 from n4x.kernel.models import ExperienceSurface
 from n4x.graph.service_base import transactional
 from n4x.source_store.service import SourceStore
@@ -19,6 +21,7 @@ class Surfaces:
         self.records = uow.records
         self.source = source
         self.drafts = Drafts(self.records)
+        self.bindings = RevisionBindings(uow)
 
     @transactional
     def create(
@@ -36,43 +39,45 @@ class Surfaces:
         created_by: str = "system",
     ) -> ExperienceSurface:
         revision = self.drafts.require_experience(experience_revision_id)
-        key = (revision.id, surface_id)
-        if self.records.experience_surfaces.get(key) is not None:
+        if self.bindings.named(
+            revision.id,
+            "DECLARES_SURFACE",
+            self.records.experience_surfaces,
+            "surface_id",
+            surface_id,
+        ) is not None:
             raise ValueError(
                 f"Surface already exists: {experience_revision_id}/{surface_id}"
             )
-        surface = ExperienceSurface(
-            experience_revision_id=revision.id,
+        surface = self._upsert(
             surface_id=surface_id,
             surface_type=surface_type,
             surface_type_version=surface_type_version,
             entrypoint=entrypoint,
-            source_tree_id=revision.source_tree_id,
             source_paths=source_paths,
             title=title,
             description=description,
             config=config or {},
             created_by=created_by,
         )
-        self._validate_sources(surface)
-        self.records.experience_surfaces.save(surface)
-        self._link(surface)
+        self._validate_sources(revision.id, surface)
+        self.bindings.replace_named(
+            revision.id,
+            "DECLARES_SURFACE",
+            None,
+            surface.id,
+            "ExperienceSurface",
+        )
         return surface
 
     def inspect(
         self, experience_revision_id: str, surface_id: str
     ) -> ExperienceSurface:
-        return self.records.experience_surfaces[
-            (experience_revision_id, surface_id)
-        ]
+        return self.bindings.surface(experience_revision_id, surface_id)
 
     def list(self, experience_revision_id: str) -> list[ExperienceSurface]:
         return sorted(
-            (
-                surface
-                for surface in self.records.experience_surfaces.values()
-                if surface.experience_revision_id == experience_revision_id
-            ),
+            self.bindings.surfaces(experience_revision_id),
             key=lambda surface: surface.surface_id,
         )
 
@@ -104,53 +109,75 @@ class Surfaces:
         }.items():
             if value is not None:
                 values[field] = value
-        updated = ExperienceSurface.model_validate(values)
-        self._validate_sources(updated)
-        self.records.experience_surfaces.save(updated)
-        self._link(updated)
-        return updated
+        surface = self._upsert(
+            surface_id=surface_id,
+            surface_type=values["surface_type"],
+            surface_type_version=values["surface_type_version"],
+            entrypoint=values["entrypoint"],
+            source_paths=values["source_paths"],
+            title=values["title"],
+            description=values["description"],
+            config=values["config"],
+            created_by=current.created_by,
+        )
+        self._validate_sources(revision.id, surface)
+        self.bindings.replace_named(
+            revision.id,
+            "DECLARES_SURFACE",
+            current.id,
+            surface.id,
+            "ExperienceSurface",
+        )
+        return surface
 
     @transactional
     def delete(self, experience_revision_id: str, surface_id: str) -> None:
-        self.drafts.require_experience(experience_revision_id)
-        self.inspect(experience_revision_id, surface_id)
-        self.records.experience_surfaces.delete(
-            (experience_revision_id, surface_id)
+        revision = self.drafts.require_experience(experience_revision_id)
+        current = self.inspect(revision.id, surface_id)
+        self.bindings.remove_named(
+            revision.id, "DECLARES_SURFACE", "ExperienceSurface", current.id
         )
 
     def relink(self, surface: ExperienceSurface) -> None:
-        self._link(surface)
+        return None
 
-    def _validate_sources(self, surface: ExperienceSurface) -> None:
-        revision = self.records.experience_revisions[
-            surface.experience_revision_id
-        ]
-        if surface.source_tree_id != revision.source_tree_id:
-            raise ValueError(
-                "Surface source tree must belong to its ExperienceRevision"
+    def _upsert(
+        self,
+        *,
+        surface_id: str,
+        surface_type: str,
+        surface_type_version: int,
+        entrypoint: str,
+        source_paths: list[str],
+        title: str,
+        description: str | None,
+        config: dict[str, Any],
+        created_by: str,
+    ) -> ExperienceSurface:
+        payload = {
+            "surface_id": surface_id,
+            "surface_type": surface_type,
+            "surface_type_version": surface_type_version,
+            "entrypoint": entrypoint,
+            "source_paths": list(source_paths),
+            "title": title,
+            "description": description,
+            "config": config,
+        }
+        interned_id = experience_surface_id(payload)
+        surface = self.records.experience_surfaces.get(interned_id)
+        if surface is None:
+            surface = ExperienceSurface(
+                id=interned_id,
+                created_by=created_by,
+                **payload,
             )
-        for path in surface.source_paths:
-            self.source.read_source_file(surface.source_tree_id, path)
+            self.records.experience_surfaces.save(surface)
+        return surface
 
-    def _link(self, surface: ExperienceSurface) -> None:
-        surface_ref = node_ref(
-            "ExperienceSurface",
-            experience_revision_id=surface.experience_revision_id,
-            surface_id=surface.surface_id,
-        )
-        self.store.create_edge(
-            node_ref("ExperienceRevision", id=surface.experience_revision_id),
-            "DECLARES_SURFACE",
-            surface_ref,
-        )
-        self.store.delete_edge(surface_ref, "USES_SOURCE")
+    def _validate_sources(
+        self, experience_revision_id: str, surface: ExperienceSurface
+    ) -> None:
+        tree_id = self.bindings.tree_id(experience_revision_id)
         for path in surface.source_paths:
-            self.store.create_edge(
-                surface_ref,
-                "USES_SOURCE",
-                node_ref(
-                    "SourceFile",
-                    source_tree_id=surface.source_tree_id,
-                    path=path,
-                ),
-            )
+            self.source.read_source_file(tree_id, path)

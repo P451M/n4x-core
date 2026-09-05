@@ -1,20 +1,20 @@
 from __future__ import annotations
 
-import difflib
 import fnmatch
 import re
-import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
 
+from n4x.graph.bindings import RevisionBindings
+from n4x.graph.intern_gc import delete_interned_orphans
 from n4x.graph.store import GraphStore, node_ref
 from n4x.graph.uow import GraphUnitOfWork, transactional
 from n4x.kernel.errors import ImmutableRevisionError, SourceConflictError
-from n4x.kernel.hash import sha256_json, sha256_text
+from n4x.kernel.intern import empty_tree_hash, listing_hash, source_content_id
 from n4x.kernel.models import (
     RevisionOwnerKind,
-    SourceChange,
+    SourceContent,
     SourceFile,
     SourceRole,
     SourceTree,
@@ -182,102 +182,48 @@ class SourceStore:
         self.store = graph_store
         self.uow = uow or GraphUnitOfWork(graph_store)
         self.graph = self.uow.records
+        self.bindings = RevisionBindings(self.uow)
 
-    @transactional
-    def create_tree(
-        self,
-        root_namespace: str,
-        revision_id: str,
-        status: str = "draft",
-        *,
-        owner_kind: RevisionOwnerKind = "ApplicationRevision",
-    ) -> SourceTree:
-        tree = SourceTree(
-            id=f"{revision_id}.source",
-            owner_kind=owner_kind,
-            owner_id=revision_id,
-            draft_or_revision_id=revision_id,
-            status=status,  # type: ignore[arg-type]
-            root_namespace=root_namespace,
-            tree_hash=sha256_json({}),
-        )
+    def interned_empty_tree(self) -> SourceTree:
+        tree_hash = empty_tree_hash()
+        existing = self.graph.source_trees.get(tree_hash)
+        if existing is not None:
+            return existing
+        tree = SourceTree(id=tree_hash, status="interned", tree_hash=tree_hash)
         self.graph.source_trees[tree.id] = tree
         return tree
 
     @transactional
-    def snapshot_tree(self, source_tree_id: str, revision_id: str) -> SourceTree:
-        source = self.graph.source_trees[source_tree_id]
-        snapshot = SourceTree(
-            id=f"{revision_id}.source.snapshot",
-            owner_kind=source.owner_kind,
-            owner_id=revision_id,
-            draft_or_revision_id=revision_id,
-            status="immutable_snapshot",
-            root_namespace=source.root_namespace,
-            tree_hash=source.tree_hash,
-            derived_from_tree_id=source_tree_id,
-        )
-        self.graph.source_trees[snapshot.id] = snapshot
-        self.store.create_edge(
-            node_ref("SourceTree", id=snapshot.id),
-            "SNAPSHOT_OF",
-            node_ref("SourceTree", id=source_tree_id),
-        )
-        for file in self.list_source_tree(source_tree_id):
-            copied = file.model_copy(update={"source_tree_id": snapshot.id})
-            self.graph.source_files[(snapshot.id, copied.path)] = copied
-            self._link_source_file(snapshot.id, copied.path)
-        return snapshot
-
-    @transactional
-    def clone_tree_to_draft(
+    def create_working_tree(
         self,
-        source_tree_id: str,
-        root_namespace: str,
         revision_id: str,
         *,
-        owner_kind: RevisionOwnerKind | None = None,
-        exclude_paths: set[str] | None = None,
+        owner_kind: RevisionOwnerKind,
     ) -> SourceTree:
-        source = self.graph.source_trees[source_tree_id]
-        draft = SourceTree(
+        tree = SourceTree(
             id=f"{revision_id}.source",
-            owner_kind=owner_kind or source.owner_kind,
-            owner_id=revision_id,
-            draft_or_revision_id=revision_id,
             status="draft",
-            root_namespace=root_namespace,
-            tree_hash=source.tree_hash,
-            derived_from_tree_id=source_tree_id,
+            tree_hash=empty_tree_hash(),
+            owner_kind=owner_kind,
+            owner_id=revision_id,
         )
-        self.graph.source_trees[draft.id] = draft
-        self.store.create_edge(
-            node_ref("SourceTree", id=draft.id),
-            "CLONED_FROM",
-            node_ref("SourceTree", id=source_tree_id),
-        )
-        for file in self.list_source_tree(source_tree_id):
-            if exclude_paths and file.path in exclude_paths:
-                continue
-            copied = file.model_copy(update={"source_tree_id": draft.id})
-            self.graph.source_files[(draft.id, copied.path)] = copied
-            self._link_source_file(draft.id, copied.path)
-        if exclude_paths:
-            self._refresh_tree_hash(draft.id)
-        return draft
+        self.graph.source_trees[tree.id] = tree
+        return tree
 
     def list_source_tree(self, source_tree_id: str) -> list[SourceFile]:
-        return sorted(
-            [
-                file
-                for (tree_id, _), file in self.graph.source_files.items()
-                if tree_id == source_tree_id
-            ],
-            key=lambda file: file.path,
-        )
+        files: list[SourceFile] = []
+        for edge in self.store.list_edges(
+            node_ref("SourceTree", id=source_tree_id), "HAS_FILE"
+        ):
+            content = self.graph.source_contents[edge.to_ref.identity["id"]]
+            files.append(self._hydrate(source_tree_id, edge.props, content))
+        return sorted(files, key=lambda file: file.path)
 
     def read_source_file(self, source_tree_id: str, path: str) -> SourceFile:
-        return self.graph.source_files[(source_tree_id, path)]
+        for file in self.list_source_tree(source_tree_id):
+            if file.path == path:
+                return file
+        raise KeyError((source_tree_id, path))
 
     def read_source_file_range(
         self,
@@ -310,9 +256,12 @@ class SourceStore:
         *,
         glob: str | None = None,
         limit: int = SEARCH_SOURCE_TREE_LIMIT,
+        context: int = 2,
     ) -> list[dict[str, object]]:
         if limit < 1:
             raise ValueError("search_source_tree limit must be >= 1")
+        if context < 0:
+            raise ValueError("search_source_tree context must be >= 0")
         cap = min(limit, SEARCH_SOURCE_TREE_LIMIT)
         try:
             compiled = re.compile(pattern)
@@ -322,14 +271,19 @@ class SourceStore:
         for file in self.list_source_tree(source_tree_id):
             if glob and not fnmatch.fnmatch(file.path, glob):
                 continue
-            for line_number, line in enumerate(file.content.splitlines(), start=1):
+            lines = file.content.splitlines()
+            for line_number, line in enumerate(lines, start=1):
                 if compiled.search(line) is None:
                     continue
+                start = max(0, line_number - 1 - context)
+                end = min(len(lines), line_number + context)
                 matches.append(
                     {
                         "path": file.path,
                         "line": line_number,
                         "snippet": line[:240],
+                        "before": [item[:240] for item in lines[start : line_number - 1]],
+                        "after": [item[:240] for item in lines[line_number:end]],
                     }
                 )
                 if len(matches) >= cap:
@@ -337,9 +291,58 @@ class SourceStore:
         return matches
 
     @transactional
+    def ensure_writable(self, revision_id: str) -> SourceTree:
+        current = self.bindings.tree(revision_id)
+        if current.status == "draft":
+            return current
+        if current.status != "interned":
+            raise ImmutableRevisionError(f"SourceTree {current.id} is not writable")
+        working = SourceTree(
+            id=f"{revision_id}.source",
+            status="draft",
+            tree_hash=current.tree_hash,
+            owner_kind=self.bindings.label(revision_id),  # type: ignore[arg-type]
+            owner_id=revision_id,
+        )
+        self.graph.source_trees[working.id] = working
+        for file in self.list_source_tree(current.id):
+            self._put_file(working.id, file)
+        self.bindings.set_tree(revision_id, working.id)
+        delete_interned_orphans(self.uow)
+        return working
+
+    @transactional
+    def intern_tree(self, revision_id: str) -> SourceTree:
+        current = self.bindings.tree(revision_id)
+        files = [
+            {
+                "path": file.path,
+                "hash": file.content_hash,
+                "role": file.role,
+                "language": file.language,
+            }
+            for file in self.list_source_tree(current.id)
+        ]
+        tree_hash = listing_hash(files)
+        interned = self.graph.source_trees.get(tree_hash)
+        if interned is None or interned.status != "interned":
+            interned = SourceTree(
+                id=tree_hash, status="interned", tree_hash=tree_hash
+            )
+            self.graph.source_trees[interned.id] = interned
+            for file in self.list_source_tree(current.id):
+                self._put_file(interned.id, file)
+        if current.id != interned.id:
+            self.bindings.set_tree(revision_id, interned.id)
+            if current.status == "draft":
+                self._delete_working_tree(current.id)
+        delete_interned_orphans(self.uow)
+        return interned
+
+    @transactional
     def write_source_file(
         self,
-        source_tree_id: str,
+        revision_id: str,
         path: str,
         content: str,
         *,
@@ -349,8 +352,8 @@ class SourceStore:
         actor: str = "system",
         tool: str = "kernel",
     ) -> SourceFile:
-        return self.batch_update_source_files(
-            source_tree_id,
+        return self.batch_update_revision(
+            revision_id,
             [
                 SourceUpdate(
                     "write",
@@ -368,7 +371,7 @@ class SourceStore:
     @transactional
     def apply_source_patch(
         self,
-        source_tree_id: str,
+        revision_id: str,
         path: str,
         patch: str,
         *,
@@ -376,7 +379,8 @@ class SourceStore:
         actor: str = "system",
         tool: str = "kernel",
     ) -> SourceFile:
-        current = self.read_source_file(source_tree_id, path)
+        tree = self.bindings.tree(revision_id)
+        current = self.read_source_file(tree.id, path)
         if expected_hash and current.content_hash != expected_hash:
             raise SourceConflictError(
                 f"source conflict for {path}: expected {expected_hash}, got {current.content_hash}",
@@ -396,7 +400,7 @@ class SourceStore:
                 nearest_lines=exc.nearest_lines,
             ) from exc
         return self.write_source_file(
-            source_tree_id,
+            revision_id,
             path,
             patched,
             role=current.role,
@@ -409,7 +413,7 @@ class SourceStore:
     @transactional
     def rename_source_file(
         self,
-        source_tree_id: str,
+        revision_id: str,
         path: str,
         new_path: str,
         *,
@@ -417,8 +421,8 @@ class SourceStore:
         actor: str = "system",
         tool: str = "kernel",
     ) -> SourceFile:
-        return self.batch_update_source_files(
-            source_tree_id,
+        return self.batch_update_revision(
+            revision_id,
             [
                 SourceUpdate(
                     "rename", path, new_path=new_path, expected_hash=expected_hash
@@ -431,22 +435,45 @@ class SourceStore:
     @transactional
     def delete_source_file(
         self,
-        source_tree_id: str,
+        revision_id: str,
         path: str,
         *,
         expected_hash: str | None = None,
         actor: str = "system",
         tool: str = "kernel",
     ) -> None:
-        self.batch_update_source_files(
-            source_tree_id,
+        self.batch_update_revision(
+            revision_id,
             [SourceUpdate("delete", path, expected_hash=expected_hash)],
             actor=actor,
             tool=tool,
         )
 
     @transactional
-    def batch_update_source_files(
+    def batch_update_revision(
+        self,
+        revision_id: str,
+        changes: Iterable[SourceUpdate],
+        *,
+        expected_tree_hash: str | None = None,
+        actor: str = "system",
+        tool: str = "kernel",
+    ) -> list[SourceFile]:
+        current = self.bindings.tree(revision_id)
+        if expected_tree_hash and current.tree_hash != expected_tree_hash:
+            raise SourceConflictError(
+                f"source tree conflict for {revision_id}: expected "
+                f"{expected_tree_hash}, got {current.tree_hash}"
+            )
+        materialized = list(changes)
+        self._validate_batch(current.id, materialized)
+        tree = self.ensure_writable(revision_id)
+        return self._batch_update_working_tree(
+            tree.id, materialized, actor=actor, tool=tool
+        )
+
+    @transactional
+    def _batch_update_working_tree(
         self,
         source_tree_id: str,
         changes: Iterable[SourceUpdate],
@@ -460,13 +487,51 @@ class SourceStore:
             raise ImmutableRevisionError(f"SourceTree {source_tree_id} is immutable")
         if expected_tree_hash and tree.tree_hash != expected_tree_hash:
             raise SourceConflictError(
-                f"source tree conflict for {source_tree_id}: expected {expected_tree_hash}, got {tree.tree_hash}"
+                f"source tree conflict for {source_tree_id}: expected "
+                f"{expected_tree_hash}, got {tree.tree_hash}"
             )
+        materialized = list(changes)
+        by_path = self._validate_batch(source_tree_id, materialized)
 
-        materialized_changes = list(changes)
-        # Validate first so the operation is atomic.
-        for change in materialized_changes:
-            current = self.graph.source_files.get((source_tree_id, change.path))
+        written: list[SourceFile] = []
+        for change in materialized:
+            current = by_path.get(change.path)
+            if change.operation == "write":
+                assert change.content is not None
+                file = self._write_blob(
+                    source_tree_id,
+                    change.path,
+                    change.content,
+                    role=change.role if current is None else current.role,
+                    language=change.language if current is None else current.language,
+                )
+                by_path[change.path] = file
+                written.append(file)
+            elif change.operation == "delete":
+                assert current is not None
+                self._unlink_path(source_tree_id, change.path)
+                del by_path[change.path]
+            else:
+                assert current is not None
+                assert change.new_path is not None
+                self._unlink_path(source_tree_id, change.path)
+                del by_path[change.path]
+                file = self._put_file(
+                    source_tree_id,
+                    current.model_copy(update={"path": change.new_path}),
+                )
+                by_path[change.new_path] = file
+                written.append(file)
+        self._refresh_tree_hash(source_tree_id)
+        delete_interned_orphans(self.uow)
+        return written
+
+    def _validate_batch(
+        self, source_tree_id: str, changes: list[SourceUpdate]
+    ) -> dict[str, SourceFile]:
+        by_path = {file.path: file for file in self.list_source_tree(source_tree_id)}
+        for change in changes:
+            current = by_path.get(change.path)
             if change.expected_hash and (
                 current is None or current.content_hash != change.expected_hash
             ):
@@ -479,108 +544,77 @@ class SourceStore:
             if change.operation == "rename":
                 if not change.new_path:
                     raise ValueError("rename requires new_path")
-                if (source_tree_id, change.new_path) in self.graph.source_files:
+                if change.new_path in by_path:
                     raise SourceConflictError(
                         f"target path already exists: {change.new_path}"
                     )
+        return by_path
 
-        group_id = str(uuid.uuid4())
-        written: list[SourceFile] = []
-        for change in materialized_changes:
-            key = (source_tree_id, change.path)
-            current = self.graph.source_files.get(key)
-            old_hash = None if current is None else current.content_hash
-            op = (
-                "modify"
-                if change.operation == "write" and current
-                else "add"
-                if change.operation == "write"
-                else change.operation
+    def _write_blob(
+        self,
+        source_tree_id: str,
+        path: str,
+        content: str,
+        *,
+        role: SourceRole,
+        language: str,
+    ) -> SourceFile:
+        content_id = source_content_id(content)
+        if self.graph.source_contents.get(content_id) is None:
+            self.graph.source_contents[content_id] = SourceContent(
+                id=content_id, content=content
             )
+        file = SourceFile(
+            source_tree_id=source_tree_id,
+            path=path,
+            role=role,
+            language=language,
+            content=content,
+            content_hash=content_id,
+            size=len(content.encode("utf-8")),
+        )
+        return self._put_file(source_tree_id, file)
 
-            if change.operation == "write":
-                assert change.content is not None
-                content_hash = sha256_text(change.content)
-                file = SourceFile(
-                    source_tree_id=source_tree_id,
-                    path=change.path,
-                    role=change.role if current is None else current.role,
-                    language=change.language if current is None else current.language,
-                    content=change.content,
-                    content_hash=content_hash,
-                    size=len(change.content.encode("utf-8")),
-                    version=1 if current is None else current.version + 1,
-                    created_at=now_utc() if current is None else current.created_at,
-                    updated_at=now_utc(),
-                )
-                self.graph.source_files[key] = file
-                self._link_source_file(source_tree_id, file.path)
-                written.append(file)
-                new_hash = content_hash
-            elif change.operation == "delete":
-                del self.graph.source_files[key]
-                self._unlink_source_file(source_tree_id, change.path)
-                new_hash = None
-            else:
-                assert current is not None
-                assert change.new_path is not None
-                del self.graph.source_files[key]
-                file = current.model_copy(
-                    update={
-                        "path": change.new_path,
-                        "version": current.version + 1,
-                        "updated_at": now_utc(),
-                    }
-                )
-                self.graph.source_files[(source_tree_id, change.new_path)] = file
-                self._unlink_source_file(source_tree_id, change.path)
-                self._link_source_file(source_tree_id, file.path)
-                written.append(file)
-                new_hash = file.content_hash
-
-            source_change = SourceChange(
-                id=str(uuid.uuid4()),
-                source_tree_id=source_tree_id,
-                change_group_id=group_id,
-                operation=op,  # type: ignore[arg-type]
-                path=change.new_path
-                if change.operation == "rename" and change.new_path
-                else change.path,
-                old_path=change.path if change.operation == "rename" else None,
-                old_hash=old_hash,
-                new_hash=new_hash,
-                actor=actor,
-                tool=tool,
+    def _put_file(self, source_tree_id: str, file: SourceFile) -> SourceFile:
+        self._unlink_path(source_tree_id, file.path)
+        if self.graph.source_contents.get(file.content_hash) is None:
+            self.graph.source_contents[file.content_hash] = SourceContent(
+                id=file.content_hash, content=file.content
             )
-            self.graph.source_changes.append(source_change)
-            self.store.create_edge(
-                node_ref("SourceTree", id=source_tree_id),
-                "HAS_CHANGE",
-                node_ref("SourceChange", id=source_change.id),
-            )
+        self.store.create_edge(
+            node_ref("SourceTree", id=source_tree_id),
+            "HAS_FILE",
+            node_ref("SourceContent", id=file.content_hash),
+            {
+                "path": file.path,
+                "role": file.role,
+                "language": file.language,
+                "size": file.size,
+            },
+        )
+        return file.model_copy(update={"source_tree_id": source_tree_id})
 
-        self._refresh_tree_hash(source_tree_id)
-        return written
-
-    def render_source_diff(
-        self, source_tree_id: str, path: str, new_content: str
-    ) -> str:
-        current = self.read_source_file(source_tree_id, path).content
-        return "".join(
-            difflib.unified_diff(
-                current.splitlines(keepends=True),
-                new_content.splitlines(keepends=True),
-                fromfile=path,
-                tofile=path,
-            )
+    def _unlink_path(self, source_tree_id: str, path: str) -> None:
+        self.store.delete_edge(
+            node_ref("SourceTree", id=source_tree_id),
+            "HAS_FILE",
+            props={"path": path},
         )
 
-    def inspect_source_changes(self, source_tree_id: str) -> list[SourceChange]:
-        return [
-            change
-            for change in self.graph.source_changes.values()
-            if change.source_tree_id == source_tree_id
-        ]
+    def delete_working_tree(self, tree_id: str) -> None:
+        tree = self.graph.source_trees.get(tree_id)
+        if tree is None:
+            return
+        if tree.status != "draft":
+            raise ImmutableRevisionError(
+                f"cannot delete interned SourceTree {tree_id}"
+            )
+        self._delete_working_tree(tree_id)
+
+    def _delete_working_tree(self, tree_id: str) -> None:
+        tree_ref = node_ref("SourceTree", id=tree_id)
+        self.store.delete_edge(tree_ref, "HAS_FILE")
+        self.graph.source_trees.delete(tree_id)
 
     def _refresh_tree_hash(self, source_tree_id: str) -> None:
         files = [
@@ -594,19 +628,19 @@ class SourceStore:
         ]
         tree = self.graph.source_trees[source_tree_id]
         self.graph.source_trees[source_tree_id] = tree.model_copy(
-            update={"tree_hash": sha256_json(files), "updated_at": now_utc()}
+            update={"tree_hash": listing_hash(files), "updated_at": now_utc()}
         )
 
-    def _link_source_file(self, source_tree_id: str, path: str) -> None:
-        self.store.create_edge(
-            node_ref("SourceTree", id=source_tree_id),
-            "HAS_FILE",
-            node_ref("SourceFile", source_tree_id=source_tree_id, path=path),
-        )
-
-    def _unlink_source_file(self, source_tree_id: str, path: str) -> None:
-        self.store.delete_edge(
-            node_ref("SourceTree", id=source_tree_id),
-            "HAS_FILE",
-            node_ref("SourceFile", source_tree_id=source_tree_id, path=path),
+    @staticmethod
+    def _hydrate(
+        source_tree_id: str, props: dict[str, object], content: SourceContent
+    ) -> SourceFile:
+        return SourceFile(
+            source_tree_id=source_tree_id,
+            path=str(props["path"]),
+            role=props.get("role", "helper"),  # type: ignore[arg-type]
+            language=str(props.get("language", "text")),
+            content=content.content,
+            content_hash=content.id,
+            size=int(props.get("size") or len(content.content.encode("utf-8"))),
         )

@@ -20,7 +20,7 @@ def test_surface_crud_is_draft_only() -> None:
     system = create_test_runtime()
     experience = system.create_experience("surface-crud", "Surface CRUD")
     revision = system.create_experience_revision(experience.id, ui_profile="none")
-    _write_source(system, revision.source_tree_id, "src/main.ts", "ready")
+    _write_source(system, revision.id, "src/main.ts", "ready")
 
     created = system.create_experience_surface(
         revision.id,
@@ -61,7 +61,7 @@ def test_child_experience_revision_clones_surface_declarations(
     _install_fake_toolchain(monkeypatch)
     experience = system.create_experience("surface-clone", "Surface Clone")
     first = system.create_experience_revision(experience.id, ui_profile="none")
-    _write_source(system, first.source_tree_id, "src/main.ts", "ready")
+    _write_source(system, first.id, "src/main.ts", "ready")
     system.create_experience_surface(
         first.id,
         "main",
@@ -75,9 +75,8 @@ def test_child_experience_revision_clones_surface_declarations(
     child = system.create_experience_revision(experience.id)
     cloned = system.inspect_experience_surface(child.id, "main")
 
-    assert cloned.experience_revision_id == child.id
-    assert cloned.source_tree_id == child.source_tree_id
-    assert cloned.created_by == "revision_clone"
+    assert cloned.surface_id == "main"
+    assert cloned.id == system.inspect_experience_surface(first.id, "main").id
     assert cloned.config == {"mount_path": "/main", "build_profile": {}, "fallback": None, "csp": {"connect_domains": [], "resource_domains": []}, "host_metadata": {}}
 
 
@@ -88,7 +87,7 @@ def test_surface_build_persists_exact_authority_and_self_contained_mcp_html(
     _install_fake_toolchain(monkeypatch, with_assets=True)
     experience = system.create_experience("surface-build", "Surface Build")
     revision = system.create_experience_revision(experience.id, ui_profile="none")
-    _write_source(system, revision.source_tree_id, "src/main.ts", "ready")
+    _write_source(system, revision.id, "src/main.ts", "ready")
     surface = system.create_experience_surface(
         revision.id,
         "assistant",
@@ -129,7 +128,7 @@ def test_default_experience_build_materializes_active_theme(
     revision = system.create_experience_revision(experience.id)
     _write_source(
         system,
-        revision.source_tree_id,
+        revision.id,
         "src/main.ts",
         "import './n4x-theme.css';",
     )
@@ -147,7 +146,7 @@ def test_default_experience_build_materializes_active_theme(
     assert materialized_themes == [system.inspect_surface_theme()["css_text"]]
     assert "--background: oklch(0.9881 0 0);" in materialized_themes[0]
     assert result.build_invocation.input_hash == system.surfaces.build_input_hash(
-        surface
+        revision.id, surface
     )
 
 
@@ -158,8 +157,8 @@ def test_surface_build_failure_does_not_activate_experience(
     _install_fake_toolchain(monkeypatch, fail_source="FAIL_BUILD")
     experience = system.create_experience("surface-atomic", "Surface Atomic")
     revision = system.create_experience_revision(experience.id, ui_profile="none")
-    _write_source(system, revision.source_tree_id, "src/good.ts", "ready")
-    _write_source(system, revision.source_tree_id, "src/bad.ts", "FAIL_BUILD")
+    _write_source(system, revision.id, "src/good.ts", "ready")
+    _write_source(system, revision.id, "src/bad.ts", "FAIL_BUILD")
     for surface_id, source in (("a-good", "src/good.ts"), ("z-bad", "src/bad.ts")):
         system.create_experience_surface(
             revision.id,
@@ -186,7 +185,7 @@ def test_pwa_validate_requires_manifest_source() -> None:
     system = create_test_runtime()
     experience = system.create_experience("pwa-validate", "PWA Validate")
     revision = system.create_experience_revision(experience.id, ui_profile="none")
-    _write_source(system, revision.source_tree_id, "src/main.ts", "ready")
+    _write_source(system, revision.id, "src/main.ts", "ready")
     system.create_experience_surface(
         revision.id,
         "browser",
@@ -208,10 +207,10 @@ def test_pwa_activation_requires_json_manifest_in_artifact(
     _install_fake_toolchain(monkeypatch)
     experience = system.create_experience("pwa-activate", "PWA Activate")
     revision = system.create_experience_revision(experience.id, ui_profile="none")
-    _write_source(system, revision.source_tree_id, "src/main.ts", "ready")
+    _write_source(system, revision.id, "src/main.ts", "ready")
     _write_source(
         system,
-        revision.source_tree_id,
+        revision.id,
         "manifest.webmanifest",
         json.dumps({"name": "PWA Activate", "display": "standalone"}),
     )
@@ -245,10 +244,10 @@ def test_pwa_activation_succeeds_when_manifest_is_in_dist(
     _install_fake_toolchain(monkeypatch)
     experience = system.create_experience("pwa-ready", "PWA Ready")
     revision = system.create_experience_revision(experience.id, ui_profile="none")
-    _write_source(system, revision.source_tree_id, "src/main.ts", "ready")
+    _write_source(system, revision.id, "src/main.ts", "ready")
     _write_source(
         system,
-        revision.source_tree_id,
+        revision.id,
         "public/manifest.webmanifest",
         json.dumps({"name": "PWA Ready", "display": "standalone"}),
     )
@@ -322,7 +321,7 @@ async def _assert_mcp_activation_notifications() -> None:
     system = create_test_runtime()
     experience = system.create_experience("notify-surface", "Notify Surface")
     revision = system.create_experience_revision(experience.id, ui_profile="none")
-    _write_source(system, revision.source_tree_id, "src/main.ts", "ready")
+    _write_source(system, revision.id, "src/main.ts", "ready")
     system.create_experience_surface(
         revision.id,
         "assistant",
@@ -363,7 +362,7 @@ async def _assert_mcp_activation_notifications() -> None:
 async def _assert_mcp_surface_crud(system) -> None:
     experience = system.create_experience("mcp-surface", "MCP Surface")
     revision = system.create_experience_revision(experience.id, ui_profile="none")
-    _write_source(system, revision.source_tree_id, "src/main.ts", "ready")
+    _write_source(system, revision.id, "src/main.ts", "ready")
     server = create_system_mcp(system)
     created = await server.call_tool(
         "create_experience_surface",

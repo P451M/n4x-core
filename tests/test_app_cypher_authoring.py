@@ -26,7 +26,7 @@ def test_action_may_inject_another_applications_existing_secret() -> None:
     system.secrets.set_secret(reference.uri, "shared-secret-value")
     revision = system.create_application_revision(reader.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/read.py",
         (
             "def run(ctx, input):\n"
@@ -45,7 +45,7 @@ def test_action_may_inject_another_applications_existing_secret() -> None:
         secret_ref_ids=[reference.id],
     )
 
-    invocation = system.run_draft_action(action.id, {})
+    invocation = system.run_draft_action(revision.id, action.action_id, {})
     inspected = [
         item.model_dump(mode="json")
         for item in system.inspect_secret_references()
@@ -65,7 +65,7 @@ def test_create_action_rejects_unknown_secret_reference() -> None:
     app = system.create_application("secret-unknown", "Secret Unknown")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/read.py",
         "def run(ctx, input):\n    return {'ok': True}\n",
         role="action",
@@ -111,7 +111,7 @@ def test_create_action_accepts_required_fields_and_null_optionals() -> None:
     app = system.create_application("action-nulls", "Action Nulls")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/echo.py",
         "def run(ctx, input):\n    return {'ok': True}\n",
         role="action",
@@ -144,7 +144,7 @@ def test_create_action_rejects_python_kind_at_field_level() -> None:
     app = system.create_application("action-kind", "Action Kind")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/echo.py",
         "def run(ctx, input):\n    return {'ok': True}\n",
         role="action",
@@ -182,12 +182,12 @@ def test_application_revision_parent_is_latest_draft_then_active() -> None:
     draft_app = system.create_application("parents-draft", "Parents Draft")
     draft_one = system.create_application_revision(draft_app.id)
     draft_two = system.create_application_revision(draft_app.id)
-    assert draft_two.parent_revision_id == draft_one.id
+    assert draft_two.id == draft_one.id
 
     app = system.create_application("parents", "Parents")
     first = system.create_application_revision(app.id)
     system.source.write_source_file(
-        first.source_tree_id,
+        first.id,
         "actions/v1.py",
         "def run(ctx, input):\n    return {'version': 1}\n",
         role="action",
@@ -203,7 +203,7 @@ def test_application_revision_parent_is_latest_draft_then_active() -> None:
     system.activate_application_revision(first.id)
     second = system.create_application_revision(app.id)
     system.source.write_source_file(
-        second.source_tree_id,
+        second.id,
         "actions/extra.py",
         "def run(ctx, input):\n    return {'extra': True}\n",
         role="action",
@@ -224,14 +224,13 @@ def test_application_revision_parent_is_latest_draft_then_active() -> None:
     assert forked.parent_revision_id == first.id
     assert not any(
         item.action_id == "parents.extra"
-        and item.application_revision_id == forked.id
-        for item in system.uow.records.action_revisions.values()
+        for item in system.source.bindings.action_revisions(forked.id)
     )
 
     rollback_app = system.create_application("parents-rollback", "Parents Rollback")
     rollback_first = system.create_application_revision(rollback_app.id)
     system.source.write_source_file(
-        rollback_first.source_tree_id,
+        rollback_first.id,
         "actions/v1.py",
         "def run(ctx, input):\n    return {'version': 1}\n",
         role="action",
@@ -265,7 +264,7 @@ def test_draft_action_on_deployment_data_space_does_not_read_production() -> Non
         revision.id, "draft-space.Item", name="Item"
     )
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/count.py",
         action_source(
             "def run(ctx, input):\n"
@@ -308,7 +307,7 @@ def test_draft_action_on_deployment_data_space_does_not_read_production() -> Non
     preview_id = deployment.data_space_ids[app.id]
 
     invocation = system.run_draft_action(
-        action.id, {}, data_space_id=preview_id
+        revision.id, action.action_id, {}, data_space_id=preview_id
     )
 
     assert invocation.status == "succeeded", invocation.error
@@ -331,7 +330,7 @@ def test_e2big_maps_to_known_error_code(monkeypatch: pytest.MonkeyPatch) -> None
     app = system.create_application("e2big", "E2BIG")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/echo.py",
         "def run(ctx, input):\n    return {'ok': True}\n",
         role="action",
@@ -356,7 +355,7 @@ def test_e2big_maps_to_known_error_code(monkeypatch: pytest.MonkeyPatch) -> None
         return original(*args, **kwargs)
 
     monkeypatch.setattr("n4x.runtime.actions.subprocess.Popen", boom)
-    invocation = system.run_draft_action(action.id, {})
+    invocation = system.run_draft_action(revision.id, action.action_id, {})
 
     assert invocation.status == "failed"
     assert invocation.metadata["error_code"] == "exec_argument_list_too_long"

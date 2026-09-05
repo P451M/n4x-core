@@ -62,7 +62,7 @@ class Host:
             "imported": revision.id,
             "enabled": False,
             "content_root": revision.content_root,
-            "source_tree_id": revision.source_tree_id,
+            "source_tree_id": self.system_graph.tree_id(revision.id),
             "version": revision.version,
         }
 
@@ -104,7 +104,7 @@ class Host:
                 "N4X_WORKER_MODE": "stdio",
                 "N4X_SYSTEM_REVISION_ID": revision.id,
                 "N4X_SYSTEM_CONTENT_ROOT": revision.content_root,
-                "N4X_SYSTEM_SOURCE_TREE_ID": revision.source_tree_id,
+                "N4X_SYSTEM_SOURCE_TREE_ID": self.system_graph.tree_id(revision.id),
                 "N4X_SYSTEM_MATERIALIZED_ROOT": str(destination),
             }
         )
@@ -183,7 +183,9 @@ class Host:
         )
         return {
             "revision_id": None if enabled is None else enabled.id,
-            "source_tree_id": None if enabled is None else enabled.source_tree_id,
+            "source_tree_id": None
+            if enabled is None
+            else self.system_graph.tree_id(enabled.id),
             "content_root": current,
             "releases": releases,
             "update_available": available,
@@ -199,7 +201,7 @@ class Host:
             if enabled is None
             else {
                 "revision_id": enabled.id,
-                "source_tree_id": enabled.source_tree_id,
+                "source_tree_id": self.system_graph.tree_id(enabled.id),
                 "content_root": enabled.content_root,
                 "provenance_kind": enabled.provenance_kind,
             },
@@ -216,7 +218,7 @@ class Host:
         return WorkerSpec(
             revision_id=revision.id,
             content_root=revision.content_root,
-            source_tree_id=revision.source_tree_id,
+            source_tree_id=self.system_graph.tree_id(revision.id),
             materialized_root=root,
             env=self.worker_env,
         )

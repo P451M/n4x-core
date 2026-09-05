@@ -5,7 +5,8 @@ import pytest
 from n4x.graph.store import node_ref
 from n4x.kernel.errors import ValidationFailure
 from n4x.kernel.models import ApplicationObject
-from n4x.testing import InMemoryGraphStore, create_test_runtime
+from n4x.kernel.intern import source_content_id
+from n4x.testing import InMemoryGraphStore, create_test_runtime, tree_id
 from tests.cypher_source import action_source
 
 
@@ -16,7 +17,7 @@ def test_runtime_creates_explicit_edges_without_legacy_sync_relationships() -> N
     app = system.create_application("graph", "Graph")
     revision = system.create_application_revision(app.id)
     source = system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/run.py",
         "def run(ctx, input):\n    return {'ok': True}\n",
         role="action",
@@ -44,17 +45,16 @@ def test_runtime_creates_explicit_edges_without_legacy_sync_relationships() -> N
         "HAS_REVISION",
         node_ref("ApplicationRevision", id=revision.id),
     )
+    interned_tree = tree_id(system, activated)
     assert store.has_edge(
         node_ref("ApplicationRevision", id=revision.id),
         "HAS_SOURCE_TREE",
-        node_ref("SourceTree", id=activated.source_tree_id),
+        node_ref("SourceTree", id=interned_tree),
     )
     assert store.has_edge(
-        node_ref("SourceTree", id=revision.source_tree_id),
+        node_ref("SourceTree", id=interned_tree),
         "HAS_FILE",
-        node_ref(
-            "SourceFile", source_tree_id=revision.source_tree_id, path=source.path
-        ),
+        node_ref("SourceContent", id=source_content_id(source.content)),
     )
     assert store.has_edge(
         node_ref("Application", id=app.id),
@@ -62,11 +62,9 @@ def test_runtime_creates_explicit_edges_without_legacy_sync_relationships() -> N
         node_ref("ObjectType", id=object_type.object_type_id),
     )
     assert store.has_edge(
+        node_ref("ApplicationRevision", id=revision.id),
+        "HAS_ACTION_REVISION",
         node_ref("ActionRevision", id=action.id),
-        "USES_SOURCE",
-        node_ref(
-            "SourceFile", source_tree_id=activated.source_tree_id, path=source.path
-        ),
     )
     assert store.has_edge(
         node_ref("Application", id=app.id),
@@ -150,7 +148,7 @@ def test_revision_clone_and_rollback_update_structural_edges() -> None:
     app = system.create_application("clone-graph", "Clone Graph")
     rev1 = system.create_application_revision(app.id)
     system.source.write_source_file(
-        rev1.source_tree_id,
+        rev1.id,
         "actions/run.py",
         "def run(ctx, input):\n    return {'version': 1}\n",
         role="action",
@@ -167,17 +165,11 @@ def test_revision_clone_and_rollback_update_structural_edges() -> None:
     active_v1 = system.activate_application_revision(rev1.id)
 
     rev2 = system.create_application_revision(app.id)
-    cloned_action = next(
-        revision
-        for revision in system.uow.records.action_revisions.values()
-        if revision.action_id == "clone-graph.run"
-        and revision.application_revision_id == rev2.id
-    )
+    cloned_action = system.source.bindings.action_revision(rev2.id, "clone-graph.run")
     cloned_object_type = next(
         revision
-        for revision in system.uow.records.object_type_revisions.values()
+        for revision in system.source.bindings.object_type_revisions(rev2.id)
         if revision.object_type_id == "clone-graph.Item"
-        and revision.application_revision_id == rev2.id
     )
 
     assert isinstance(system.store, InMemoryGraphStore)
@@ -187,11 +179,9 @@ def test_revision_clone_and_rollback_update_structural_edges() -> None:
         node_ref("ActionRevision", id=cloned_action.id),
     )
     assert system.store.has_edge(
+        node_ref("ApplicationRevision", id=rev2.id),
+        "HAS_ACTION_REVISION",
         node_ref("ActionRevision", id=cloned_action.id),
-        "USES_SOURCE",
-        node_ref(
-            "SourceFile", source_tree_id=rev2.source_tree_id, path="actions/run.py"
-        ),
     )
     assert system.store.has_edge(
         node_ref("ObjectType", id=object_type_v1.object_type_id),
@@ -200,7 +190,7 @@ def test_revision_clone_and_rollback_update_structural_edges() -> None:
     )
 
     system.source.write_source_file(
-        rev2.source_tree_id,
+        rev2.id,
         "actions/run.py",
         "def run(ctx, input):\n    return {'version': 2}\n",
         role="action",
@@ -248,7 +238,7 @@ def test_existing_objects_keep_conformance_revision_after_new_activation() -> No
         rev1.id, "schema-evolution.Item", name="Item"
     )
     system.source.write_source_file(
-        rev1.source_tree_id,
+        rev1.id,
         "actions/create.py",
         action_source(
             "def run(ctx, input):\n"
@@ -290,12 +280,12 @@ def test_existing_objects_keep_conformance_revision_after_new_activation() -> No
     rev2 = system.create_application_revision(app.id)
     object_type_v2 = next(
         revision
-        for revision in system.uow.records.object_type_revisions.values()
+        for revision in system.source.bindings.object_type_revisions(rev2.id)
         if revision.object_type_id == object_type_v1.object_type_id
-        and revision.application_revision_id == rev2.id
     )
     system.activate_application_revision(rev2.id)
 
+    assert object_type_v2.id == object_type_v1.id
     assert system.validate_graph_shape()["ok"] is True
     assert system.store.has_edge(
         node_ref(
@@ -307,16 +297,6 @@ def test_existing_objects_keep_conformance_revision_after_new_activation() -> No
         "CONFORMS_TO",
         node_ref("ObjectTypeRevision", id=object_type_v1.id),
     )
-    assert not system.store.has_edge(
-        node_ref(
-            "ApplicationObject",
-            application_id=app.id,
-            data_space_id="production",
-            id=obj.id,
-        ),
-        "CONFORMS_TO",
-        node_ref("ObjectTypeRevision", id=object_type_v2.id),
-    )
 
 
 def test_admin_repair_recreates_missing_structural_edges() -> None:
@@ -324,7 +304,7 @@ def test_admin_repair_recreates_missing_structural_edges() -> None:
     app = system.create_application("repair-graph", "Repair Graph")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/run.py",
         "def run(ctx, input):\n    return {'ok': True}\n",
         role="action",

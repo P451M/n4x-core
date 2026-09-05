@@ -68,11 +68,11 @@ def test_contract_versions_are_stable() -> None:
     assert EXPERIENCE_BRIDGE_VERSION == "n4x.experience.bridge.v1"
     assert EXECUTION_CONTEXT_VERSION == "n4x.execution.context.v1"
     assert FILE_DELIVERY_CONTRACT_VERSION == "n4x.file.delivery.v1"
-    assert MCP_AUTHORING_VERSION == "n4x.mcp.authoring.v8"
+    assert MCP_AUTHORING_VERSION == "n4x.mcp.authoring.v9"
     assert CALLBACK_CONTRACT_VERSION == "n4x.callback.v1"
     assert PACKAGE_FORMAT_VERSION == "n4x.package.v2"
     assert PACKAGE_SCHEMA_FINGERPRINT.startswith("sha256:")
-    assert GRAPH_METAMODEL_VERSION == "n4x.graph.metamodel.v5"
+    assert GRAPH_METAMODEL_VERSION == "n4x.graph.metamodel.v6"
     assert (
         sha256_json(Neo4jGraph.schema_statements())
         == GRAPH_METAMODEL_SCHEMA_FINGERPRINT
@@ -92,7 +92,7 @@ def test_activation_rejects_raw_graph_access_without_gateway() -> None:
     app = system.create_application("cypher-app", "Cypher App")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/probe.py",
         "def run(ctx, input):\n    return {'ok': True}\n",
         role="action",
@@ -118,7 +118,7 @@ def test_fat_existing_nodes_do_not_put_object_json_on_the_child_env() -> None:
     revision = system.create_application_revision(app.id)
     system.create_object_type(revision.id, "snapshot-none.Item", name="Item")
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/create.py",
         action_source(
             "def run(ctx, input):\n"
@@ -174,7 +174,7 @@ def test_every_action_receives_the_cypher_gateway() -> None:
     app = system.create_application("cypher-always", "Cypher Always")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/read.py",
         (
             "def run(ctx, input):\n"
@@ -206,7 +206,7 @@ def test_cypher_gateway_audits_read_and_write_queries(
     app = system.create_application(application_id, "Cypher OK")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/probe.py",
         (
             "def run(ctx, input):\n"
@@ -224,7 +224,7 @@ def test_cypher_gateway_audits_read_and_write_queries(
         role="action",
         language="python",
     )
-    action = system.create_action(
+    system.create_action(
         revision.id,
         f"{application_id}.probe",
         kind="normal",
@@ -253,7 +253,7 @@ def test_action_rejects_inherited_uow_before_preparation() -> None:
     app = system.create_application("uow-action", "UoW Action")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/run.py",
         "def run(ctx, input):\n    return {'ok': True}\n",
         role="action",
@@ -286,7 +286,7 @@ def test_failed_action_rolls_back_an_open_cypher_transaction() -> None:
     revision = system.create_application_revision(app.id)
     system.create_object_type(revision.id, "buffer-fail.Item", name="Item")
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/fail.py",
         action_source(
             "def run(ctx, input):\n"
@@ -307,7 +307,7 @@ def test_failed_action_rolls_back_an_open_cypher_transaction() -> None:
         source_paths=["actions/fail.py"],
     )
 
-    invocation = system.run_draft_action(action.id, {})
+    invocation = system.run_draft_action(revision.id, action.action_id, {})
 
     assert invocation.status == "failed"
     assert "after buffering" in (invocation.error or "")
@@ -325,7 +325,7 @@ def test_read_mode_rejects_write_cypher() -> None:
     app = system.create_application("cypher-read", "Cypher Read")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/probe.py",
         (
             "def run(ctx, input):\n"
@@ -356,7 +356,7 @@ def test_delete_object_succeeds_without_provenance_record() -> None:
     revision = system.create_application_revision(app.id)
     system.create_object_type(revision.id, "notes-del.Note", name="Note")
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/notes.py",
         action_source(
             "def create_note(ctx, input):\n"
@@ -385,7 +385,9 @@ def test_delete_object_succeeds_without_provenance_record() -> None:
         source_paths=["actions/notes.py"],
         input_schema={"type": "object", "required": ["id"]},
     )
-    created = system.run_draft_action(create_action.id, {"title": "Temp"})
+    created = system.run_draft_action(
+        revision.id, create_action.action_id, {"title": "Temp"}
+    )
     assert created.status == "succeeded", created.error
     note_id = created.output["id"]
     system.activate_application_revision(revision.id)
@@ -403,7 +405,7 @@ def test_expired_job_lease_recovers_after_restart(
     app = system.create_application(application_id, "Lease App")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/ok.py",
         "def run(ctx, input):\n    return {'ok': True}\n",
         role="action",
@@ -420,7 +422,7 @@ def test_expired_job_lease_recovers_after_restart(
         revision.id,
         f"{application_id}.external",
         trigger_type="external",
-        action_revision_id=action.id,
+        action_id=action.action_id,
         max_attempts=2,
         retry_policy={"base_seconds": 0},
     )

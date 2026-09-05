@@ -71,6 +71,7 @@ class GraphStore(Protocol):
         from_ref: NodeRef,
         edge_type: str,
         to_ref: NodeRef | None = None,
+        props: dict[str, Any] | None = None,
     ) -> None: ...
 
     def replace_single_edge(
@@ -205,6 +206,7 @@ class Neo4jGraphStore:
         from_ref: NodeRef,
         edge_type: str,
         to_ref: NodeRef | None = None,
+        props: dict[str, Any] | None = None,
     ) -> None:
         self.graph.delete_edge(
             from_ref.label,
@@ -212,6 +214,7 @@ class Neo4jGraphStore:
             edge_type,
             None if to_ref is None else to_ref.label,
             None if to_ref is None else to_ref.identity,
+            props,
         )
 
     def replace_single_edge(

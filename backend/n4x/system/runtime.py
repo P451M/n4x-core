@@ -164,7 +164,6 @@ class SystemRuntime:
             self.definitions,
             self.experiences,
             self.experiences.surfaces,
-            self.invocations,
         )
         self.packages = PackageService(
             self.uow,
@@ -174,7 +173,6 @@ class SystemRuntime:
             applications=self.applications,
             schema=self.schema,
             definitions=self.definitions,
-            invocations=self.invocations,
             experiences=self.experiences,
             experience_surfaces=self.experiences.surfaces,
             activation=self.activation,
@@ -393,7 +391,7 @@ class SystemRuntime:
         surface = self.experiences.surfaces.inspect(
             experience_revision_id, surface_id
         )
-        return self.surfaces.build(surface)
+        return self.surfaces.build(experience_revision_id, surface)
 
     def resolve_experience_surface_artifact(
         self,
@@ -406,7 +404,9 @@ class SystemRuntime:
         surface = self.experiences.surfaces.inspect(
             experience_revision_id, surface_id
         )
-        resolved_hash = input_hash or self.surfaces.build_input_hash(surface)
+        resolved_hash = input_hash or self.surfaces.build_input_hash(
+            experience_revision_id, surface
+        )
         artifacts = [
             artifact
             for artifact in self.uow.records.build_artifacts.values()
@@ -537,6 +537,9 @@ class SystemRuntime:
             parent_revision_id=parent_revision_id,
         )
 
+    def discard_application_revision(self, application_revision_id: str) -> None:
+        self.application_service.discard_revision(application_revision_id)
+
     def create_runtime_dependency(
         self,
         application_revision_id: str,
@@ -573,6 +576,7 @@ class SystemRuntime:
         *,
         created_by: str = "system",
         ui_profile: UiProfile | None = None,
+        parent_revision_id: str | None = None,
         application_access: list[ApplicationAccessDeclaration | dict[str, Any]]
         | None = None,
     ) -> ExperienceRevision:
@@ -580,8 +584,12 @@ class SystemRuntime:
             experience_id,
             created_by=created_by,
             ui_profile=ui_profile,
+            parent_revision_id=parent_revision_id,
             application_access=application_access,
         )
+
+    def discard_experience_revision(self, experience_revision_id: str) -> None:
+        self.experience_service.discard_revision(experience_revision_id)
 
     def create_experience_runtime_dependency(
         self,
@@ -765,7 +773,7 @@ class SystemRuntime:
         trigger_id: str,
         *,
         trigger_type: str,
-        action_revision_id: str,
+        action_id: str,
         config: dict[str, Any] | None = None,
         input_template: dict[str, Any] | None = None,
         overlap_policy: str | None = None,
@@ -778,7 +786,7 @@ class SystemRuntime:
             application_revision_id,
             trigger_id,
             trigger_type=trigger_type,
-            action_revision_id=action_revision_id,
+            action_id=action_id,
             config=config,
             input_template=input_template,
             overlap_policy=overlap_policy,
@@ -812,24 +820,32 @@ class SystemRuntime:
 
     def run_draft_action(
         self,
-        action_revision_id: str,
+        application_revision_id: str,
+        action_id: str,
         input_value: dict[str, Any],
         *,
         data_space_id: str | None = None,
     ) -> Invocation:
         return self.invocation_service.run_draft_action(
-            action_revision_id, input_value, data_space_id=data_space_id
+            application_revision_id,
+            action_id,
+            input_value,
+            data_space_id=data_space_id,
         )
 
     def submit_draft_action(
         self,
-        action_revision_id: str,
+        application_revision_id: str,
+        action_id: str,
         input_value: dict[str, Any],
         *,
         data_space_id: str | None = None,
     ) -> Invocation:
         return self.invocation_service.submit_draft_action(
-            action_revision_id, input_value, data_space_id=data_space_id
+            application_revision_id,
+            action_id,
+            input_value,
+            data_space_id=data_space_id,
         )
 
     def await_invocation(
@@ -842,13 +858,13 @@ class SystemRuntime:
     def create_test_case(
         self,
         application_revision_id: str,
-        action_revision_id: str,
+        action_id: str,
         input_value: dict[str, Any],
         expected_output: Any,
     ) -> TestCase:
-        return self.invocation_service.create_test_case(
+        return self.definition_service.create_test_case(
             application_revision_id,
-            action_revision_id,
+            action_id,
             input_value,
             expected_output,
         )

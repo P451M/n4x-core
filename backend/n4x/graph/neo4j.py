@@ -12,7 +12,7 @@ from neo4j import GraphDatabase
 from neo4j.exceptions import TransientError
 from pydantic import BaseModel
 
-from n4x.kernel.errors import ConcurrentGraphUpdateError
+from n4x.kernel.errors import ConcurrentGraphUpdateError, TransientGraphConflictError
 
 
 class Neo4jConfigError(ValueError):
@@ -80,7 +80,7 @@ class Neo4jGraph:
             "CREATE CONSTRAINT n4x_application_revision_id IF NOT EXISTS FOR (n:ApplicationRevision) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT n4x_experience_id IF NOT EXISTS FOR (n:Experience) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT n4x_experience_revision_id IF NOT EXISTS FOR (n:ExperienceRevision) REQUIRE n.id IS UNIQUE",
-            "CREATE CONSTRAINT n4x_experience_surface_identity IF NOT EXISTS FOR (n:ExperienceSurface) REQUIRE (n.experience_revision_id, n.surface_id) IS UNIQUE",
+            "CREATE CONSTRAINT n4x_experience_surface_id IF NOT EXISTS FOR (n:ExperienceSurface) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT n4x_experience_validation_report_id IF NOT EXISTS FOR (n:ExperienceValidationReport) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT n4x_authoring_guide_id IF NOT EXISTS FOR (n:AuthoringGuide) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT n4x_authoring_guide_revision_id IF NOT EXISTS FOR (n:AuthoringGuideRevision) REQUIRE n.id IS UNIQUE",
@@ -89,8 +89,7 @@ class Neo4jGraph:
             "CREATE CONSTRAINT n4x_app_blueprint_id IF NOT EXISTS FOR (n:AppBlueprint) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT n4x_blueprint_revision_id IF NOT EXISTS FOR (n:BlueprintRevision) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT n4x_source_tree_id IF NOT EXISTS FOR (n:SourceTree) REQUIRE n.id IS UNIQUE",
-            "CREATE CONSTRAINT n4x_source_file_tree_path IF NOT EXISTS FOR (n:SourceFile) REQUIRE (n.source_tree_id, n.path) IS UNIQUE",
-            "CREATE CONSTRAINT n4x_source_change_id IF NOT EXISTS FOR (n:SourceChange) REQUIRE n.id IS UNIQUE",
+            "CREATE CONSTRAINT n4x_source_content_id IF NOT EXISTS FOR (n:SourceContent) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT n4x_application_object_identity IF NOT EXISTS FOR (n:ApplicationObject) REQUIRE (n.application_id, n.data_space_id, n.id) IS UNIQUE",
             "CREATE CONSTRAINT n4x_object_type_id IF NOT EXISTS FOR (n:ObjectType) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT n4x_object_type_revision_id IF NOT EXISTS FOR (n:ObjectTypeRevision) REQUIRE n.id IS UNIQUE",
@@ -119,26 +118,26 @@ class Neo4jGraph:
             "CREATE CONSTRAINT n4x_build_artifact_id IF NOT EXISTS FOR (n:BuildArtifact) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT n4x_validation_report_id IF NOT EXISTS FOR (n:ValidationReport) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT n4x_package_import_attempt_id IF NOT EXISTS FOR (n:PackageImportAttempt) REQUIRE n.id IS UNIQUE",
-            "CREATE INDEX n4x_source_file_path IF NOT EXISTS FOR (n:SourceFile) ON (n.source_tree_id, n.path)",
+            "CREATE INDEX n4x_source_content_hash IF NOT EXISTS FOR (n:SourceContent) ON (n.id)",
             "CREATE INDEX n4x_authoring_guide_revision_scope IF NOT EXISTS FOR (n:AuthoringGuideRevision) ON (n.guide_id, n.release_version)",
             "CREATE INDEX n4x_ui_theme_revision_scope IF NOT EXISTS FOR (n:UiThemeRevision) ON (n.theme_id, n.release_version)",
             "CREATE INDEX n4x_blueprint_revision_scope IF NOT EXISTS FOR (n:BlueprintRevision) ON (n.blueprint_id, n.status)",
-            "CREATE INDEX n4x_source_change_tree IF NOT EXISTS FOR (n:SourceChange) ON (n.source_tree_id)",
+            "CREATE INDEX n4x_source_tree_status IF NOT EXISTS FOR (n:SourceTree) ON (n.status, n.tree_hash)",
             "CREATE INDEX n4x_data_space_kind IF NOT EXISTS FOR (n:DataSpace) ON (n.application_id, n.kind)",
             "CREATE INDEX n4x_development_deployment_status IF NOT EXISTS FOR (n:DevelopmentDeployment) ON (n.status, n.expires_at)",
             "CREATE INDEX n4x_application_object_scope IF NOT EXISTS FOR (n:ApplicationObject) ON (n.application_id, n.data_space_id, n.object_type_id)",
             "CREATE INDEX n4x_package_import_attempt_hash IF NOT EXISTS FOR (n:PackageImportAttempt) ON (n.package_hash)",
-            "CREATE INDEX n4x_object_type_revision_scope IF NOT EXISTS FOR (n:ObjectTypeRevision) ON (n.application_revision_id, n.object_type_id)",
-            "CREATE INDEX n4x_relation_type_revision_scope IF NOT EXISTS FOR (n:RelationTypeRevision) ON (n.application_revision_id, n.relation_type_id)",
+            "CREATE INDEX n4x_object_type_revision_type IF NOT EXISTS FOR (n:ObjectTypeRevision) ON (n.object_type_id)",
+            "CREATE INDEX n4x_relation_type_revision_type IF NOT EXISTS FOR (n:RelationTypeRevision) ON (n.relation_type_id)",
             "CREATE INDEX n4x_credential_record_scope IF NOT EXISTS FOR (n:CredentialRecord) ON (n.application_id, n.provider)",
             "CREATE INDEX n4x_callback_route_state IF NOT EXISTS FOR (n:CallbackRoute) ON (n.state, n.status)",
             "CREATE INDEX n4x_experience_revision_scope IF NOT EXISTS FOR (n:ExperienceRevision) ON (n.experience_id, n.status)",
-            "CREATE INDEX n4x_experience_surface_type IF NOT EXISTS FOR (n:ExperienceSurface) ON (n.experience_revision_id, n.surface_type, n.surface_type_version)",
-            "CREATE INDEX n4x_dependency_revision_owner IF NOT EXISTS FOR (n:RuntimeDependency) ON (n.owner_kind, n.owner_id, n.ecosystem)",
+            "CREATE INDEX n4x_experience_surface_type IF NOT EXISTS FOR (n:ExperienceSurface) ON (n.surface_id, n.surface_type, n.surface_type_version)",
+            "CREATE INDEX n4x_dependency_spec IF NOT EXISTS FOR (n:RuntimeDependency) ON (n.ecosystem, n.package, n.spec)",
             "CREATE INDEX n4x_javascript_environment_owner IF NOT EXISTS FOR (n:JavaScriptEnvironment) ON (n.owner_kind, n.owner_id)",
             "CREATE INDEX n4x_build_invocation_owner IF NOT EXISTS FOR (n:BuildInvocation) ON (n.owner_kind, n.owner_id, n.kind)",
             "CREATE INDEX n4x_build_artifact_owner IF NOT EXISTS FOR (n:BuildArtifact) ON (n.owner_kind, n.owner_id, n.artifact_type)",
-            "CREATE INDEX n4x_trigger_revision_scope IF NOT EXISTS FOR (n:TriggerRevision) ON (n.application_revision_id, n.trigger_id)",
+            "CREATE INDEX n4x_trigger_revision_action IF NOT EXISTS FOR (n:TriggerRevision) ON (n.trigger_id, n.action_id)",
             "CREATE INDEX n4x_job_record_trigger IF NOT EXISTS FOR (n:JobRecord) ON (n.trigger_revision_id, n.status)",
             "CREATE INDEX n4x_job_attempt_job IF NOT EXISTS FOR (n:JobAttempt) ON (n.job_id, n.attempt)",
             "CREATE INDEX n4x_cypher_audit_invocation IF NOT EXISTS FOR (n:CypherAuditRecord) ON (n.invocation_id, n.created_at)",
@@ -260,16 +259,23 @@ class Neo4jGraph:
         to_label = _safe_label(to_label)
         edge_type = _safe_relationship_type(edge_type)
         props = _encode_props(props or {})
+        path = props.get("path")
+        merge = (
+            f"MERGE (from)-[r:{edge_type} {{path: $path}}]->(to)"
+            if edge_type == "HAS_FILE" and path is not None
+            else f"MERGE (from)-[r:{edge_type}]->(to)"
+        )
         self._consume(
             f"""
             MATCH (from:{from_label} {{{_cypher_identity_prefixed("from", from_identity)}}})
             MATCH (to:{to_label} {{{_cypher_identity_prefixed("to", to_identity)}}})
-            MERGE (from)-[r:{edge_type}]->(to)
+            {merge}
             SET r += $props
             """,
             **{f"from_{key}": value for key, value in from_identity.items()},
             **{f"to_{key}": value for key, value in to_identity.items()},
             props=props,
+            path=path,
         )
 
     def delete_edge(
@@ -279,6 +285,7 @@ class Neo4jGraph:
         edge_type: str,
         to_label: str | None = None,
         to_identity: dict[str, Any] | None = None,
+        props: dict[str, Any] | None = None,
     ) -> None:
         from_label = _safe_label(from_label)
         edge_type = _safe_relationship_type(edge_type)
@@ -292,9 +299,18 @@ class Neo4jGraph:
             params.update({f"to_{key}": value for key, value in to_identity.items()})
         else:
             to_match = "->()"
+        where = ""
+        if props:
+            clauses = []
+            for key, value in props.items():
+                param = f"prop_{key}"
+                clauses.append(f"r.{key} = ${param}")
+                params[param] = value
+            where = " WHERE " + " AND ".join(clauses)
         self._consume(
             f"""
             MATCH (from:{from_label} {{{_cypher_identity_prefixed("from", from_identity)}}})-[r:{edge_type}]{to_match}
+            {where}
             DELETE r
             """,
             **params,
@@ -713,20 +729,28 @@ class Neo4jGraph:
 
     def _consume(self, query: str, **params: Any) -> None:
         transaction_context = self._transaction_context.get()
-        if transaction_context is not None:
-            _, tx = transaction_context
-            tx.run(query, **params).consume()
-            return
-        with self.driver.session(database=self.config.database) as session:
-            session.run(query, **params).consume()
+        try:
+            if transaction_context is not None:
+                _, tx = transaction_context
+                tx.run(query, **params).consume()
+                return
+            with self.driver.session(database=self.config.database) as session:
+                session.run(query, **params).consume()
+        except TransientError as error:
+            _raise_if_deadlock(error)
+            raise
 
     def _records(self, query: str, **params: Any) -> list[Any]:
         transaction_context = self._transaction_context.get()
-        if transaction_context is not None:
-            _, tx = transaction_context
-            return list(tx.run(query, **params))
-        with self.driver.session(database=self.config.database) as session:
-            return list(session.run(query, **params))
+        try:
+            if transaction_context is not None:
+                _, tx = transaction_context
+                return list(tx.run(query, **params))
+            with self.driver.session(database=self.config.database) as session:
+                return list(session.run(query, **params))
+        except TransientError as error:
+            _raise_if_deadlock(error)
+            raise
 
 
 def _cypher_identity(identity: dict[str, Any]) -> str:
@@ -751,6 +775,13 @@ def _safe_relationship_type(rel_type: str) -> str:
     if not rel_type.replace("_", "").isalnum():
         raise ValueError(f"invalid Neo4j relationship type: {rel_type}")
     return rel_type
+
+
+def _raise_if_deadlock(error: TransientError) -> None:
+    if error.code == "Neo.TransientError.Transaction.DeadlockDetected":
+        raise TransientGraphConflictError(
+            "graph write deadlock; retry the unit of work"
+        ) from error
 
 
 def _encode_props(values: dict[str, Any]) -> dict[str, Any]:
@@ -786,11 +817,4 @@ def _node_identity(label: str, props: dict[str, Any]) -> dict[str, Any]:
         }
     if "id" in props:
         return {"id": props["id"]}
-    if "experience_revision_id" in props and "surface_id" in props:
-        return {
-            "experience_revision_id": props["experience_revision_id"],
-            "surface_id": props["surface_id"],
-        }
-    if "source_tree_id" in props and "path" in props:
-        return {"source_tree_id": props["source_tree_id"], "path": props["path"]}
     return dict(props)

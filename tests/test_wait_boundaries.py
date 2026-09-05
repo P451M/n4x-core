@@ -100,13 +100,13 @@ def test_python_manager_persists_missing_uv_failure(
 
 
 def test_surface_runtime_rejects_inherited_uow() -> None:
-    system, surface = _surface_fixture("surface-boundary")
+    system, revision, surface = _surface_fixture("surface-boundary")
 
     with system.uow:
         with pytest.raises(
             GraphUnitOfWorkError, match="build Experience Surface artifact"
         ):
-            system.surfaces.build(surface)
+            system.surfaces.build(revision.id, surface)
         assert system.uow.is_active
         assert system.uow.depth == 1
 
@@ -114,19 +114,19 @@ def test_surface_runtime_rejects_inherited_uow() -> None:
 def test_surface_subprocesses_run_without_active_uow_and_own_build_edge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    system, surface = _surface_fixture("surface-waits")
+    system, revision, surface = _surface_fixture("surface-waits")
     calls: list[list[str]] = []
     _mock_surface_tools(monkeypatch, system, calls)
 
-    result = system.build_experience_surface(surface.experience_revision_id, surface.surface_id)
+    result = system.build_experience_surface(revision.id, surface.surface_id)
 
     assert result.environment.status == "ready"
     assert result.build_invocation.status == "succeeded"
     assert len(calls) == 3
     assert not system.uow.is_active
     edges = system.store.list_edges(
-        from_ref=node_ref("ExperienceSurface", experience_revision_id=surface.experience_revision_id, surface_id=surface.surface_id),
-        edge_type="BUILDS_TO",
+        from_ref=node_ref("ExperienceRevision", id=revision.id),
+        edge_type="HAS_BUILD_ARTIFACT",
     )
     assert len(edges) == 1
     assert edges[0].to_ref == node_ref(
@@ -137,7 +137,7 @@ def test_surface_subprocesses_run_without_active_uow_and_own_build_edge(
 def test_surface_install_failure_is_durable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    system, surface = _surface_fixture("surface-failure")
+    system, revision, surface = _surface_fixture("surface-failure")
     monkeypatch.setattr(
         "n4x.runtime.surfaces.shutil.which",
         lambda executable: f"/fake/{executable}",
@@ -158,7 +158,7 @@ def test_surface_install_failure_is_durable(
     monkeypatch.setattr("n4x.runtime.surfaces.subprocess.run", fail_install)
 
     with pytest.raises(ValidationFailure, match="pnpm install failed"):
-        system.surfaces.build(surface)
+        system.surfaces.build(revision.id, surface)
 
     environments = system.uow.records.javascript_environments.values()
     invocations = system.uow.records.build_invocations.values()
@@ -172,7 +172,7 @@ def _surface_fixture(slug: str):
     experience = system.create_experience(slug, slug.replace("-", " ").title())
     revision = system.create_experience_revision(experience.id, ui_profile="none")
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "src/main.tsx",
         "document.body.textContent = 'ready';\n",
         role="surface",
@@ -186,7 +186,7 @@ def _surface_fixture(slug: str):
         source_paths=["src/main.tsx"],
         config={"mount_path": "/"},
     )
-    return system, surface
+    return system, revision, surface
 
 
 def _mock_surface_tools(

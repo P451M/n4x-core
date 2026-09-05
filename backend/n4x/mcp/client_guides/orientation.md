@@ -18,8 +18,10 @@ Do not put UI in an Application or domain behavior in an Experience.
 
 ## Inspect first
 
-List and inspect existing Applications, Experiences, revisions, and SourceFiles
-before creating replacements. Prefer reuse over a parallel namespace.
+Call `inspect_system` for Applications and Experiences (`id`, `name`, `status`,
+`active_revision_id`, `draft_revision_id`, derived `source_tree_id`). Inspect
+revisions and source before creating replacements. Prefer reuse over a parallel
+namespace.
 
 ## Validation vs design
 
@@ -30,9 +32,10 @@ context and the graph-owned authoring guide are advisory.
 ## Destructive tools
 
 Call `reset_dev_graph`, `import_official_system`, `enable_system_revision`, `repair_graph_edges`,
-`retire_experience`, `delete_working_set`, deletes, rollback, and checkpoint restore only when the
+`retire_experience`, `delete_working_set`, `discard_application_revision`,
+`discard_experience_revision`, deletes, rollback, and checkpoint restore only when the
 user explicitly asks. Confirmation databases and expected revision ids must
-match exactly.
+match exactly. Discard is DESTROY: draft only; interned blobs stay.
 
 ## Kernel boundary
 

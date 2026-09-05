@@ -95,6 +95,10 @@ class ConcurrentGraphUpdateError(N4XError):
     """Raised when an optimistic graph pointer replacement loses a race."""
 
 
+class TransientGraphConflictError(ConcurrentGraphUpdateError):
+    """Raised when Neo4j deadlocks. Outermost transactional() retries."""
+
+
 class GraphUnitOfWorkError(N4XError):
     """Raised when a graph unit of work cannot commit."""
 

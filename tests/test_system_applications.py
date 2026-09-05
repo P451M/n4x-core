@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from n4x.system.runtime import SystemRuntime
+from n4x.testing import tree_id
 from n4x.testing.graph_store import InMemoryGraphStore
 
 
 def _mark_application_revision_active(
     runtime: SystemRuntime, application_id: str, revision_id: str
 ) -> None:
+    runtime.source.intern_tree(revision_id)
     application = runtime.uow.records.applications[application_id]
     runtime.uow.applications.replace_active_revision(
         application_id,
@@ -20,62 +22,34 @@ def _mark_application_revision_active(
     runtime.uow.applications.save_revision(
         revision.model_copy(update={"status": "active"})
     )
-    for collection, owner_field, revision_collection in (
-        (runtime.uow.records.actions, "action_id", runtime.uow.records.action_revisions),
-        (
-            runtime.uow.records.triggers,
-            "trigger_id",
-            runtime.uow.records.trigger_revisions,
+    bindings = runtime.source.bindings
+    for stable, match in (
+        *(
+            (runtime.uow.records.actions[item.action_id], item)
+            for item in bindings.action_revisions(revision_id)
+        ),
+        *(
+            (runtime.uow.records.triggers[item.trigger_id], item)
+            for item in bindings.trigger_revisions(revision_id)
+        ),
+        *(
+            (runtime.uow.records.object_types[item.object_type_id], item)
+            for item in bindings.object_type_revisions(revision_id)
+        ),
+        *(
+            (runtime.uow.records.relation_types[item.relation_type_id], item)
+            for item in bindings.relation_type_revisions(revision_id)
         ),
     ):
-        for stable in collection.values():
-            if stable.application_id != application_id:
-                continue
-            match = next(
-                (
-                    item
-                    for item in revision_collection.values()
-                    if getattr(item, owner_field) == stable.id
-                    and item.application_revision_id == revision_id
-                ),
-                None,
-            )
-            if match is not None:
-                collection.save(
-                    stable.model_copy(update={"active_revision_id": match.id})
-                )
-    for object_type in runtime.uow.records.object_types.values():
-        if object_type.application_id != application_id:
+        if stable.application_id != application_id:
             continue
-        match = next(
-            (
-                item
-                for item in runtime.uow.records.object_type_revisions.values()
-                if item.object_type_id == object_type.id
-                and item.application_revision_id == revision_id
-            ),
-            None,
-        )
-        if match is not None:
-            runtime.uow.records.object_types.save(
-                object_type.model_copy(update={"active_revision_id": match.id})
-            )
-    for relation_type in runtime.uow.records.relation_types.values():
-        if relation_type.application_id != application_id:
-            continue
-        match = next(
-            (
-                item
-                for item in runtime.uow.records.relation_type_revisions.values()
-                if item.relation_type_id == relation_type.id
-                and item.application_revision_id == revision_id
-            ),
-            None,
-        )
-        if match is not None:
-            runtime.uow.records.relation_types.save(
-                relation_type.model_copy(update={"active_revision_id": match.id})
-            )
+        collection = {
+            "Action": runtime.uow.records.actions,
+            "Trigger": runtime.uow.records.triggers,
+            "ObjectType": runtime.uow.records.object_types,
+            "RelationType": runtime.uow.records.relation_types,
+        }[type(stable).__name__]
+        collection.save(stable.model_copy(update={"active_revision_id": match.id}))
 
 
 def test_system_creates_application() -> None:
@@ -87,7 +61,7 @@ def test_system_creates_application() -> None:
     assert [item.id for item in listed] == ["mail"]
     draft = runtime.applications.create_revision("mail")
     assert draft.id.startswith("mail@")
-    assert draft.source_tree_id
+    assert tree_id(runtime, draft)
     spaces = list(runtime.uow.records.data_spaces.values())
     assert any(
         space.id == "production" and space.application_id == "mail" for space in spaces
@@ -99,7 +73,7 @@ def test_system_draft_inherits_source_and_schema() -> None:
     runtime.applications.create("mail", "Mail")
     first = runtime.applications.create_revision("mail")
     runtime.source.write_source_file(
-        first.source_tree_id,
+        first.id,
         "actions/echo.py",
         "def run():\n    return {'ok': True}\n",
         role="action",
@@ -129,51 +103,32 @@ def test_system_draft_inherits_source_and_schema() -> None:
         entrypoint="actions/echo.py:run",
         source_paths=["actions/echo.py"],
     )
-    runtime.definitions.create_trigger(
+    trigger = runtime.definitions.create_trigger(
         first.id,
         "mail.hourly",
         trigger_type="schedule",
-        action_revision_id=action.id,
+        action_id=action.action_id,
         config={"cron": "0 * * * *"},
     )
     _mark_application_revision_active(runtime, "mail", first.id)
 
     draft = runtime.applications.create_revision("mail")
     assert draft.parent_revision_id == first.id
-    assert draft.source_tree_id != first.source_tree_id
-    cloned = runtime.source.read_source_file(draft.source_tree_id, "actions/echo.py")
+    assert tree_id(runtime, draft) == tree_id(runtime, first)
+    cloned = runtime.source.read_source_file(tree_id(runtime, draft), "actions/echo.py")
     assert "return {'ok': True}" in cloned.content
-    cloned_objects = [
-        item
-        for item in runtime.uow.records.object_type_revisions.values()
-        if item.application_revision_id == draft.id
+    bindings = runtime.source.bindings
+    assert [item.id for item in bindings.object_type_revisions(draft.id)] == [
+        object_revision.id
     ]
-    assert len(cloned_objects) == 1
-    assert cloned_objects[0].id != object_revision.id
-    assert cloned_objects[0].object_type_id == "mail.Message"
-    cloned_relations = [
-        item
-        for item in runtime.uow.records.relation_type_revisions.values()
-        if item.application_revision_id == draft.id
+    assert [item.relation_type_id for item in bindings.relation_type_revisions(draft.id)] == [
+        "mail.belongs_to"
     ]
-    assert len(cloned_relations) == 1
-    cloned_deps = [
-        item
-        for item in runtime.uow.records.runtime_dependencies.values()
-        if item.owner_id == draft.id
-    ]
-    assert [item.package for item in cloned_deps] == ["httpx"]
-    cloned_actions = [
-        item
-        for item in runtime.uow.records.action_revisions.values()
-        if item.application_revision_id == draft.id
-    ]
+    assert [item.package for item in bindings.dependencies(draft.id)] == ["httpx"]
+    cloned_actions = bindings.action_revisions(draft.id)
     assert [item.action_id for item in cloned_actions] == ["mail.echo"]
-    assert cloned_actions[0].id != action.id
-    cloned_triggers = [
-        item
-        for item in runtime.uow.records.trigger_revisions.values()
-        if item.application_revision_id == draft.id
-    ]
+    assert cloned_actions[0].id == action.id
+    cloned_triggers = bindings.trigger_revisions(draft.id)
     assert [item.trigger_id for item in cloned_triggers] == ["mail.hourly"]
-    assert cloned_triggers[0].action_revision_id == cloned_actions[0].id
+    assert cloned_triggers[0].id == trigger.id
+    assert cloned_triggers[0].action_id == action.action_id

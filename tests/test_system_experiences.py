@@ -5,6 +5,7 @@ import pytest
 from n4x.kernel.errors import ConcurrentGraphUpdateError, ValidationFailure
 from n4x.runtime.actions import RuntimePaths
 from n4x.system.runtime import SystemRuntime
+from n4x.testing import tree_id
 from n4x.testing.graph_store import InMemoryGraphStore
 
 
@@ -45,7 +46,7 @@ def test_system_experience_draft_inherits_source_and_surface() -> None:
     experience = runtime.experiences.create("mail-ui", "Mail UI")
     first = runtime.experiences.create_revision("mail-ui", ui_profile="none")
     runtime.source.write_source_file(
-        first.source_tree_id,
+        first.id,
         "surfaces/inbox.tsx",
         "export default function Inbox() { return null }\n",
         role="surface",
@@ -63,6 +64,10 @@ def test_system_experience_draft_inherits_source_and_surface() -> None:
         source_paths=["surfaces/inbox.tsx"],
         title="Inbox",
     )
+    runtime.source.intern_tree(first.id)
+    runtime.uow.experiences.save_revision(
+        first.model_copy(update={"status": "active"})
+    )
     runtime.uow.experiences.replace_active_revision(
         "mail-ui", first.id, expected_revision_id=None
     )
@@ -74,13 +79,13 @@ def test_system_experience_draft_inherits_source_and_surface() -> None:
     assert draft.parent_revision_id == first.id
     assert draft.ui_profile == "none"
     cloned = runtime.source.read_source_file(
-        draft.source_tree_id, "surfaces/inbox.tsx"
+        tree_id(runtime, draft), "surfaces/inbox.tsx"
     )
     assert "Inbox" in cloned.content
     cloned_surfaces = runtime.experiences.surfaces.list(draft.id)
     assert [item.surface_id for item in cloned_surfaces] == ["inbox"]
-    assert cloned_surfaces[0].source_tree_id == draft.source_tree_id
-    assert cloned_surfaces[0].experience_revision_id != surface.experience_revision_id
+    assert cloned_surfaces[0].id == surface.id
+    assert tree_id(runtime, draft) == tree_id(runtime, first)
     inspected = runtime.experiences.inspect_revision(draft.id)
     assert inspected["surfaces"][0]["surface_id"] == "inbox"
     assert inspected["dependencies"][0]["package"] == "react"
@@ -94,7 +99,7 @@ def test_system_validates_and_activates_experience() -> None:
         runtime.applications.create("mail", "Mail")
         app_revision = runtime.applications.create_revision("mail")
         runtime.activation.activate(app_revision.id)
-        experience = runtime.experiences.create("mail-ui", "Mail UI")
+        runtime.experiences.create("mail-ui", "Mail UI")
         revision = runtime.experiences.create_revision(
             "mail-ui",
             ui_profile="none",

@@ -12,6 +12,7 @@ from n4x.kernel.errors import ValidationFailure
 from n4x.system.runtime import SystemRuntime
 from n4x.runtime.action_supervisor import ActionSupervisor
 from n4x.runtime.actions import RuntimePaths
+from n4x.kernel.models import ExecutionContext
 from n4x.testing import InMemoryGraphStore
 
 
@@ -21,6 +22,14 @@ def _pid_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _ctx(application_revision_id: str, application_id: str = "supervised") -> ExecutionContext:
+    return ExecutionContext(
+        correlation_id=f"supervised-{application_revision_id}",
+        application_revision_id=application_revision_id,
+        application_id=application_id,
+    )
 
 
 def _supervised_action(
@@ -49,7 +58,7 @@ def _supervised_action(
     system.create_application("supervised", "Supervised")
     revision = system.create_application_revision("supervised")
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/wait.py",
         (
             "import time\n\n"
@@ -71,17 +80,18 @@ def _supervised_action(
         concurrency_policy=concurrency_policy,
         timeout_seconds=timeout_seconds,
     )
-    return system, supervisor, action.id
+    return system, supervisor, revision.id, action.id
 
 
 def test_supervisor_persists_queued_running_and_terminal_lifecycle() -> None:
-    system, supervisor, action_revision_id = _supervised_action()
+    system, supervisor, application_revision_id, action_revision_id = _supervised_action()
     revision = system.graph.action_revisions[action_revision_id]
 
     queued = supervisor.submit(
         revision,
         {"seconds": 0.2, "value": "done"},
         invocation_kind="draft",
+        execution_context=_ctx(application_revision_id),
     )
 
     assert queued.status == "queued"
@@ -100,7 +110,7 @@ def test_supervisor_persists_queued_running_and_terminal_lifecycle() -> None:
 
 
 def test_supervisor_rejects_work_beyond_worker_and_queue_capacity() -> None:
-    system, supervisor, action_revision_id = _supervised_action(
+    system, supervisor, application_revision_id, action_revision_id = _supervised_action(
         workers=1, queue_capacity=0
     )
     revision = system.graph.action_revisions[action_revision_id]
@@ -108,6 +118,7 @@ def test_supervisor_rejects_work_beyond_worker_and_queue_capacity() -> None:
         revision,
         {"seconds": 0.2, "value": "first"},
         invocation_kind="draft",
+        execution_context=_ctx(application_revision_id),
     )
 
     with pytest.raises(ValidationFailure, match="queue is full"):
@@ -115,6 +126,7 @@ def test_supervisor_rejects_work_beyond_worker_and_queue_capacity() -> None:
             revision,
             {"seconds": 0, "value": "rejected"},
             invocation_kind="draft",
+            execution_context=_ctx(application_revision_id),
         )
 
     assert supervisor.await_invocation(first.id, timeout=3).status == "succeeded"
@@ -122,10 +134,9 @@ def test_supervisor_rejects_work_beyond_worker_and_queue_capacity() -> None:
 
 
 def test_http_event_loop_remains_responsive_while_action_runs() -> None:
-    system, _, action_revision_id = _supervised_action()
-    action_revision = system.graph.action_revisions[action_revision_id]
+    system, _, application_revision_id, _ = _supervised_action()
     system.activate_application_revision(
-        action_revision.application_revision_id
+        application_revision_id
     )
     app = create_system_http_app(system)
 
@@ -152,12 +163,13 @@ def test_http_event_loop_remains_responsive_while_action_runs() -> None:
 
 
 def test_running_action_streams_logs_and_cancels_process_group() -> None:
-    system, supervisor, action_revision_id = _supervised_action()
+    system, supervisor, application_revision_id, action_revision_id = _supervised_action()
     revision = system.graph.action_revisions[action_revision_id]
     queued = supervisor.submit(
         revision,
         {"seconds": 10, "value": "late", "log": "started-child"},
         invocation_kind="draft",
+        execution_context=_ctx(application_revision_id),
     )
     deadline = time.monotonic() + 3
     while "started-child" not in supervisor.inspect(queued.id).stdout:
@@ -175,7 +187,7 @@ def test_running_action_streams_logs_and_cancels_process_group() -> None:
 
 
 def test_supervisor_renews_linked_heartbeat_during_long_action() -> None:
-    system, supervisor, action_revision_id = _supervised_action(
+    system, supervisor, application_revision_id, action_revision_id = _supervised_action(
         heartbeat_interval_seconds=0.05
     )
     revision = system.graph.action_revisions[action_revision_id]
@@ -185,6 +197,7 @@ def test_supervisor_renews_linked_heartbeat_during_long_action() -> None:
         revision,
         {"seconds": 0.25, "value": "done"},
         heartbeat_callback=lambda: heartbeats.append(time.monotonic()),
+        execution_context=_ctx(application_revision_id),
     )
 
     assert completed.status == "succeeded"
@@ -193,10 +206,9 @@ def test_supervisor_renews_linked_heartbeat_during_long_action() -> None:
 
 
 def test_http_submit_inspect_logs_and_cancel_invocation() -> None:
-    system, _, action_revision_id = _supervised_action()
-    action_revision = system.graph.action_revisions[action_revision_id]
+    system, _, application_revision_id, _ = _supervised_action()
     system.activate_application_revision(
-        action_revision.application_revision_id
+        application_revision_id
     )
     app = create_system_http_app(system)
 
@@ -240,7 +252,7 @@ def test_http_submit_inspect_logs_and_cancel_invocation() -> None:
 
 
 def test_reject_if_running_policy_is_scoped_to_stable_action() -> None:
-    system, supervisor, action_revision_id = _supervised_action(
+    system, supervisor, application_revision_id, action_revision_id = _supervised_action(
         workers=2,
         queue_capacity=2,
         concurrency_policy="reject_if_running",
@@ -248,7 +260,7 @@ def test_reject_if_running_policy_is_scoped_to_stable_action() -> None:
     revision = system.graph.action_revisions[action_revision_id]
     first = supervisor.submit(
         revision, {"seconds": 0.25, "value": "first"}
-    )
+    , execution_context=_ctx(application_revision_id))
     deadline = time.monotonic() + 2
     while supervisor.inspect(first.id).status == "queued":
         assert time.monotonic() < deadline
@@ -259,30 +271,30 @@ def test_reject_if_running_policy_is_scoped_to_stable_action() -> None:
     ):
         supervisor.submit(
             revision, {"seconds": 0, "value": "rejected"}
-        )
+        , execution_context=_ctx(application_revision_id))
 
     assert supervisor.await_invocation(first.id).status == "succeeded"
     next_invocation = supervisor.run(
         revision, {"seconds": 0, "value": "next"}
-    )
+    , execution_context=_ctx(application_revision_id))
     assert next_invocation.status == "succeeded"
     system.close()
 
 
 def test_scheduled_long_action_renews_job_lease() -> None:
-    system, supervisor, action_revision_id = _supervised_action(
+    system, supervisor, application_revision_id, action_revision_id = _supervised_action(
         heartbeat_interval_seconds=0.05
     )
     action_revision = system.graph.action_revisions[action_revision_id]
     system.create_trigger(
-        action_revision.application_revision_id,
+        application_revision_id,
         "supervised.external",
         trigger_type="external",
-        action_revision_id=action_revision.id,
+        action_id=action_revision.action_id,
         input_template={"seconds": 0.25, "value": "done"},
     )
     system.activate_application_revision(
-        action_revision.application_revision_id
+        application_revision_id
     )
     observed = []
     heartbeat_job = system.scheduler._heartbeat_job
@@ -305,11 +317,11 @@ def test_scheduled_long_action_renews_job_lease() -> None:
 def test_parallel_action_does_not_redirect_host_process_stdout(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    system, supervisor, action_revision_id = _supervised_action()
+    system, supervisor, application_revision_id, action_revision_id = _supervised_action()
     revision = system.graph.action_revisions[action_revision_id]
     queued = supervisor.submit(
         revision, {"seconds": 0.2, "value": "done"}
-    )
+    , execution_context=_ctx(application_revision_id))
     deadline = time.monotonic() + 2
     while supervisor.inspect(queued.id).status == "queued":
         assert time.monotonic() < deadline
@@ -324,7 +336,7 @@ def test_parallel_action_does_not_redirect_host_process_stdout(
 
 
 def test_cold_parallel_actions_share_materialization_and_environment() -> None:
-    system, supervisor, action_revision_id = _supervised_action(
+    system, supervisor, application_revision_id, action_revision_id = _supervised_action(
         workers=8,
         queue_capacity=0,
     )
@@ -333,7 +345,7 @@ def test_cold_parallel_actions_share_materialization_and_environment() -> None:
     queued = [
         supervisor.submit(
             revision, {"seconds": 0.05, "value": index}
-        )
+        , execution_context=_ctx(application_revision_id))
         for index in range(8)
     ]
     completed = [
@@ -346,17 +358,22 @@ def test_cold_parallel_actions_share_materialization_and_environment() -> None:
 
 
 def test_serial_invokes_reuse_one_pid_for_draft_and_active() -> None:
-    system, supervisor, action_revision_id = _supervised_action()
+    system, supervisor, application_revision_id, action_revision_id = _supervised_action()
     revision = system.graph.action_revisions[action_revision_id]
     first = supervisor.run(
-        revision, {"seconds": 0, "value": "one"}, invocation_kind="draft"
+        revision, {"seconds": 0, "value": "one"}, invocation_kind="draft",
+        execution_context=_ctx(application_revision_id),
     )
     second = supervisor.run(
-        revision, {"seconds": 0, "value": "two"}, invocation_kind="draft"
+        revision, {"seconds": 0, "value": "two"}, invocation_kind="draft",
+        execution_context=_ctx(application_revision_id),
     )
-    system.activate_application_revision(revision.application_revision_id)
+    system.activate_application_revision(application_revision_id)
     third = supervisor.run(
-        revision, {"seconds": 0, "value": "three"}, invocation_kind="active"
+        revision,
+        {"seconds": 0, "value": "three"},
+        invocation_kind="active",
+        execution_context=_ctx(application_revision_id),
     )
 
     assert first.status == second.status == third.status == "succeeded"
@@ -365,15 +382,17 @@ def test_serial_invokes_reuse_one_pid_for_draft_and_active() -> None:
 
 
 def test_overlapping_invokes_burst_two_pids() -> None:
-    system, supervisor, action_revision_id = _supervised_action(
+    system, supervisor, application_revision_id, action_revision_id = _supervised_action(
         workers=2, queue_capacity=2
     )
     revision = system.graph.action_revisions[action_revision_id]
     first = supervisor.submit(
-        revision, {"seconds": 0.3, "value": "a"}, invocation_kind="draft"
+        revision, {"seconds": 0.3, "value": "a"}, invocation_kind="draft",
+        execution_context=_ctx(application_revision_id),
     )
     second = supervisor.submit(
-        revision, {"seconds": 0.3, "value": "b"}, invocation_kind="draft"
+        revision, {"seconds": 0.3, "value": "b"}, invocation_kind="draft",
+        execution_context=_ctx(application_revision_id),
     )
     completed = [
         supervisor.await_invocation(first.id),
@@ -386,13 +405,14 @@ def test_overlapping_invokes_burst_two_pids() -> None:
 
 
 def test_activate_kills_superseded_revision_child() -> None:
-    system, supervisor, action_revision_id = _supervised_action()
+    system, supervisor, application_revision_id, action_revision_id = _supervised_action()
     revision = system.graph.action_revisions[action_revision_id]
     first = supervisor.run(
-        revision, {"seconds": 0, "value": "a"}, invocation_kind="draft"
+        revision, {"seconds": 0, "value": "a"}, invocation_kind="draft",
+        execution_context=_ctx(application_revision_id),
     )
     pid = first.metadata["pid"]
-    system.activate_application_revision(revision.application_revision_id)
+    system.activate_application_revision(application_revision_id)
     assert system.runtime.pool.contains_pid(pid)
     next_revision = system.create_application_revision("supervised")
     system.activate_application_revision(next_revision.id)
@@ -400,14 +420,12 @@ def test_activate_kills_superseded_revision_child() -> None:
     assert first.status == "succeeded"
     assert not system.runtime.pool.contains_pid(pid)
     assert not _pid_alive(pid)
-    replacement = next(
-        item
-        for item in system.graph.action_revisions.values()
-        if item.application_revision_id == next_revision.id
-        and item.action_id == "supervised.wait"
+    replacement = system.source.bindings.action_revision(
+        next_revision.id, "supervised.wait"
     )
     second = supervisor.run(
-        replacement, {"seconds": 0, "value": "b"}, invocation_kind="draft"
+        replacement, {"seconds": 0, "value": "b"}, invocation_kind="draft",
+        execution_context=_ctx(next_revision.id),
     )
     assert second.status == "succeeded"
     assert second.metadata["pid"] != pid
@@ -415,9 +433,8 @@ def test_activate_kills_superseded_revision_child() -> None:
 
 
 def test_expire_development_deployment_kills_data_space_child() -> None:
-    system, supervisor, action_revision_id = _supervised_action()
-    revision = system.graph.action_revisions[action_revision_id]
-    application_id = system.graph.revisions[revision.application_revision_id].application_id
+    system, supervisor, application_revision_id, _ = _supervised_action()
+    application_id = system.graph.revisions[application_revision_id].application_id
     system.create_experience("supervised-ui", "Supervised UI")
     experience_revision = system.create_experience_revision(
         "supervised-ui",
@@ -425,7 +442,7 @@ def test_expire_development_deployment_kills_data_space_child() -> None:
     )
     deployment = system.create_development_deployment(
         experience_revision.id,
-        {application_id: revision.application_revision_id},
+        {application_id: application_revision_id},
     )
     first = system.run_development_action(
         deployment.id,
@@ -444,10 +461,11 @@ def test_expire_development_deployment_kills_data_space_child() -> None:
 
 
 def test_timeout_drops_child_from_pool() -> None:
-    system, supervisor, action_revision_id = _supervised_action(timeout_seconds=1)
+    system, supervisor, application_revision_id, action_revision_id = _supervised_action(timeout_seconds=1)
     revision = system.graph.action_revisions[action_revision_id]
     queued = supervisor.submit(
-        revision, {"seconds": 10, "value": "late"}, invocation_kind="draft"
+        revision, {"seconds": 10, "value": "late"}, invocation_kind="draft",
+        execution_context=_ctx(application_revision_id),
     )
     deadline = time.monotonic() + 2
     while supervisor.inspect(queued.id).status == "queued":
@@ -469,13 +487,15 @@ def test_timeout_drops_child_from_pool() -> None:
 
 def test_pool_size_zero_never_retains(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("N4X_ACTION_POOL_SIZE", "0")
-    system, supervisor, action_revision_id = _supervised_action()
+    system, supervisor, application_revision_id, action_revision_id = _supervised_action()
     revision = system.graph.action_revisions[action_revision_id]
     first = supervisor.run(
-        revision, {"seconds": 0, "value": "one"}, invocation_kind="draft"
+        revision, {"seconds": 0, "value": "one"}, invocation_kind="draft",
+        execution_context=_ctx(application_revision_id),
     )
     second = supervisor.run(
-        revision, {"seconds": 0, "value": "two"}, invocation_kind="draft"
+        revision, {"seconds": 0, "value": "two"}, invocation_kind="draft",
+        execution_context=_ctx(application_revision_id),
     )
 
     assert first.status == second.status == "succeeded"
@@ -485,14 +505,16 @@ def test_pool_size_zero_never_retains(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_idle_reclaim_drops_unused_child(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("N4X_ACTION_POOL_IDLE_SECONDS", "0.2")
-    system, supervisor, action_revision_id = _supervised_action()
+    system, supervisor, application_revision_id, action_revision_id = _supervised_action()
     revision = system.graph.action_revisions[action_revision_id]
     first = supervisor.run(
-        revision, {"seconds": 0, "value": "one"}, invocation_kind="draft"
+        revision, {"seconds": 0, "value": "one"}, invocation_kind="draft",
+        execution_context=_ctx(application_revision_id),
     )
     time.sleep(0.4)
     second = supervisor.run(
-        revision, {"seconds": 0, "value": "two"}, invocation_kind="draft"
+        revision, {"seconds": 0, "value": "two"}, invocation_kind="draft",
+        execution_context=_ctx(application_revision_id),
     )
 
     assert first.status == second.status == "succeeded"
@@ -501,17 +523,19 @@ def test_idle_reclaim_drops_unused_child(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_new_python_environment_does_not_reuse_prior_interpreter() -> None:
-    system, supervisor, action_revision_id = _supervised_action()
+    system, supervisor, application_revision_id, action_revision_id = _supervised_action()
     revision = system.graph.action_revisions[action_revision_id]
     first = supervisor.run(
-        revision, {"seconds": 0, "value": "one"}, invocation_kind="draft"
+        revision, {"seconds": 0, "value": "one"}, invocation_kind="draft",
+        execution_context=_ctx(application_revision_id),
     )
     pid = first.metadata["pid"]
     system.create_runtime_dependency(
-        revision.application_revision_id, "python", "packaging", "==25.0"
+        application_revision_id, "python", "packaging", "==25.0"
     )
     second = supervisor.run(
-        revision, {"seconds": 0, "value": "two"}, invocation_kind="draft"
+        revision, {"seconds": 0, "value": "two"}, invocation_kind="draft",
+        execution_context=_ctx(application_revision_id),
     )
 
     assert first.status == second.status == "succeeded"

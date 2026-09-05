@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from n4x.kernel.errors import ValidationFailure
+from n4x.kernel.models import now_utc
 from n4x.system.runtime import SystemRuntime
 from n4x.testing import create_test_runtime
 from tests.cypher_source import action_source
@@ -16,7 +17,7 @@ def test_external_trigger_run_persists_job_and_invocation(
         revision_id,
         "triggered.external",
         trigger_type="external",
-        action_revision_id=action_id,
+        action_id=action_id,
         input_template={"title": "From trigger"},
         max_attempts=2,
     )
@@ -52,7 +53,7 @@ def test_event_trigger_dispatches_matching_event_type_only() -> None:
         revision_id,
         "triggered.event",
         trigger_type="event",
-        action_revision_id=action_id,
+        action_id=action_id,
         config={"event_type": "counter.requested"},
         input_template={"title": "Default"},
     )
@@ -78,7 +79,7 @@ def test_schedule_trigger_mounts_with_apscheduler_and_records_missed_jobs() -> N
         revision_id,
         "triggered.schedule",
         trigger_type="schedule",
-        action_revision_id=action_id,
+        action_id=action_id,
         config={"cron": "*/5 * * * *"},
         input_template={"title": "Scheduled"},
     )
@@ -102,7 +103,7 @@ def test_failed_trigger_records_retry_wait_and_then_executes() -> None:
     app = system.create_application("broken-trigger", "Broken Trigger")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/broken.py",
         "def run(ctx, input):\n    raise RuntimeError('boom')\n",
         role="action",
@@ -119,7 +120,7 @@ def test_failed_trigger_records_retry_wait_and_then_executes() -> None:
         revision.id,
         "broken-trigger.external",
         trigger_type="external",
-        action_revision_id=action.id,
+        action_id=action.action_id,
         max_attempts=2,
         retry_policy={"base_seconds": 1},
     )
@@ -147,13 +148,13 @@ def test_triggers_paused_blocks_every_new_trigger_path_but_not_actions() -> None
         revision_id,
         "triggered.external",
         trigger_type="external",
-        action_revision_id=action_revision_id,
+        action_id=action_revision_id,
     )
     system.create_trigger(
         revision_id,
         "triggered.event",
         trigger_type="event",
-        action_revision_id=action_revision_id,
+        action_id=action_revision_id,
         config={"event_type": "counter.requested"},
     )
     system.activate_application_revision(revision_id)
@@ -185,7 +186,7 @@ def _app_with_counter_action() -> tuple[SystemRuntime, str, str]:
         required=["title"],
     )
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/counter.py",
         action_source(
             "def run(ctx, input):\n"
@@ -204,4 +205,67 @@ def _app_with_counter_action() -> tuple[SystemRuntime, str, str]:
         source_paths=["actions/counter.py"],
         input_schema={"type": "object", "required": ["title"]},
     )
-    return system, revision.id, action.id
+    return system, revision.id, action.action_id
+
+
+def test_queued_job_uses_enqueued_revision_tree_after_later_activate() -> None:
+    system = create_test_runtime()
+    app = system.create_application("markers", "Markers")
+    first = system.create_application_revision(app.id)
+    system.source.write_source_file(
+        first.id,
+        "actions/mark.py",
+        "def run(ctx, input):\n    return {'marker': 'v1'}\n",
+        role="action",
+        language="python",
+    )
+    action = system.create_action(
+        first.id,
+        "markers.mark",
+        kind="normal",
+        entrypoint="actions/mark.py:run",
+        source_paths=["actions/mark.py"],
+    )
+    trigger = system.create_trigger(
+        first.id,
+        "markers.external",
+        trigger_type="external",
+        action_id=action.action_id,
+    )
+    system.activate_application_revision(first.id)
+
+    with system.uow:
+        job = system.scheduler._record_job(
+            app.id,
+            trigger,
+            {},
+            "queued-across-activate",
+            status="scheduled",
+            scheduled_at=now_utc(),
+            queued_at=now_utc(),
+            application_revision_id=first.id,
+        )
+
+    second = system.create_application_revision(app.id)
+    system.source.write_source_file(
+        second.id,
+        "actions/mark.py",
+        "def run(ctx, input):\n    return {'marker': 'v2'}\n",
+        role="action",
+        language="python",
+    )
+    system.create_action(
+        second.id,
+        "markers.mark",
+        kind="normal",
+        entrypoint="actions/mark.py:run",
+        source_paths=["actions/mark.py"],
+    )
+    system.activate_application_revision(second.id)
+    assert system.inspect_application(app.id).active_revision_id == second.id
+
+    completed = system.scheduler._execute_job(job, trigger)
+    invocation = system.graph.invocations[completed.invocation_id]
+    assert completed.status == "succeeded"
+    assert completed.application_revision_id == first.id
+    assert invocation.output == {"marker": "v1"}

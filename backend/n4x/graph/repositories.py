@@ -47,8 +47,7 @@ from n4x.kernel.models import (
     RelationTypeRevision,
     RuntimeDependency,
     SecretReference,
-    SourceChange,
-    SourceFile,
+    SourceContent,
     SourceTree,
     SystemRevision,
     TestCase,
@@ -200,7 +199,6 @@ class RepositoryRecords:
             uow,
             "ExperienceSurface",
             ExperienceSurface,
-            ("experience_revision_id", "surface_id"),
         )
         self.experience_validation_reports = RecordCollection(
             uow, "ExperienceValidationReport", ExperienceValidationReport
@@ -220,13 +218,7 @@ class RepositoryRecords:
             uow, "BlueprintRevision", BlueprintRevision
         )
         self.source_trees = RecordCollection(uow, "SourceTree", SourceTree)
-        self.source_files = RecordCollection(
-            uow,
-            "SourceFile",
-            SourceFile,
-            ("source_tree_id", "path"),
-        )
-        self.source_changes = RecordCollection(uow, "SourceChange", SourceChange)
+        self.source_contents = RecordCollection(uow, "SourceContent", SourceContent)
         self.objects = RecordCollection(
             uow,
             "ApplicationObject",
@@ -649,33 +641,11 @@ class SourceRepository(_BoundRepository):
     def get_tree(self, tree_id: str) -> SourceTree | None:
         return self._get("SourceTree", {"id": tree_id}, SourceTree)
 
-    def save_file(self, source_file: SourceFile) -> None:
-        identity = {
-            "source_tree_id": source_file.source_tree_id,
-            "path": source_file.path,
-        }
-        self._save("SourceFile", identity, source_file)
+    def save_content(self, content: SourceContent) -> None:
+        self._save("SourceContent", {"id": content.id}, content)
 
-    def get_file(self, tree_id: str, path: str) -> SourceFile | None:
-        return self._get(
-            "SourceFile",
-            {"source_tree_id": tree_id, "path": path},
-            SourceFile,
-        )
-
-    def list_files(self, tree_id: str) -> list[SourceFile]:
-        return self._list("SourceFile", SourceFile, {"source_tree_id": tree_id})
-
-    def save_change(self, change: SourceChange) -> None:
-        self._save("SourceChange", {"id": change.id}, change)
-
-    def link_file(self, tree_id: str, path: str) -> None:
-        with self._transaction():
-            self.store.create_edge(
-                node_ref("SourceTree", id=tree_id),
-                "HAS_FILE",
-                node_ref("SourceFile", source_tree_id=tree_id, path=path),
-            )
+    def get_content(self, content_id: str) -> SourceContent | None:
+        return self._get("SourceContent", {"id": content_id}, SourceContent)
 
 
 class ObjectRepository(_BoundRepository):

@@ -33,7 +33,7 @@ def test_experience_root_delete_then_reimport_restores_working_set(
         application_access=[{"application_id": "backend"}],
     )
     system.source.write_source_file(
-        experience_revision.source_tree_id,
+        experience_revision.id,
         "src/main.ts",
         "document.body.textContent = 'portable';\n",
         role="surface",
@@ -118,7 +118,7 @@ def test_experience_root_refuses_when_another_experience_lists_an_exported_app(
         application_access=[{"application_id": "backend"}],
     )
     system.source.write_source_file(
-        owner_revision.source_tree_id,
+        owner_revision.id,
         "src/main.ts",
         "document.body.textContent = 'owner';\n",
         role="surface",

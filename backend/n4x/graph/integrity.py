@@ -59,11 +59,7 @@ NODE_DECLARATIONS = (
     NodeDeclaration("revisions", "ApplicationRevision"),
     NodeDeclaration("experiences", "Experience"),
     NodeDeclaration("experience_revisions", "ExperienceRevision"),
-    NodeDeclaration(
-        "experience_surfaces",
-        "ExperienceSurface",
-        ("experience_revision_id", "surface_id"),
-    ),
+    NodeDeclaration("experience_surfaces", "ExperienceSurface"),
     NodeDeclaration("experience_validation_reports", "ExperienceValidationReport"),
     NodeDeclaration("authoring_guides", "AuthoringGuide"),
     NodeDeclaration("authoring_guide_revisions", "AuthoringGuideRevision"),
@@ -72,8 +68,7 @@ NODE_DECLARATIONS = (
     NodeDeclaration("app_blueprints", "AppBlueprint"),
     NodeDeclaration("blueprint_revisions", "BlueprintRevision"),
     NodeDeclaration("source_trees", "SourceTree"),
-    NodeDeclaration("source_files", "SourceFile", ("source_tree_id", "path")),
-    NodeDeclaration("source_changes", "SourceChange"),
+    NodeDeclaration("source_contents", "SourceContent"),
     NodeDeclaration(
         "objects",
         "ApplicationObject",
@@ -167,29 +162,6 @@ OWNERSHIP_DECLARATIONS = (
         owner_constant="n4x",
     ),
     OwnershipDeclaration(
-        "source_files",
-        "SourceFile",
-        "HAS_FILE",
-        "SourceTree",
-        owner_field="source_tree_id",
-        child_identity_fields=("source_tree_id", "path"),
-    ),
-    OwnershipDeclaration(
-        "source_changes",
-        "SourceChange",
-        "HAS_CHANGE",
-        "SourceTree",
-        owner_field="source_tree_id",
-    ),
-    OwnershipDeclaration(
-        "runtime_dependencies",
-        "RuntimeDependency",
-        "DECLARES_DEPENDENCY",
-        "",
-        owner_field="owner_id",
-        owner_kind_field="owner_kind",
-    ),
-    OwnershipDeclaration(
         "object_types",
         "ObjectType",
         "DEFINES_OBJECT_TYPE",
@@ -209,14 +181,6 @@ OWNERSHIP_DECLARATIONS = (
         "DEFINES_ACTION",
         "Application",
         owner_field="application_id",
-    ),
-    OwnershipDeclaration(
-        "experience_surfaces",
-        "ExperienceSurface",
-        "DECLARES_SURFACE",
-        "ExperienceRevision",
-        owner_field="experience_revision_id",
-        child_identity_fields=("experience_revision_id", "surface_id"),
     ),
     OwnershipDeclaration(
         "triggers",
@@ -256,13 +220,6 @@ OWNERSHIP_DECLARATIONS = (
         "HAS_CALLBACK_ROUTE",
         "Application",
         owner_field="application_id",
-    ),
-    OwnershipDeclaration(
-        "test_cases",
-        "TestCase",
-        "HAS_TEST",
-        "ApplicationRevision",
-        owner_field="application_revision_id",
     ),
     OwnershipDeclaration(
         "validation_reports",
@@ -567,12 +524,14 @@ class GraphIntegrityService:
                         f"{_format_ref(from_ref)}->{_format_ref(outgoing[0].to_ref)}"
                     )
 
-            errors.extend(self._validate_reachability(plan.nodes, actual_edges))
+            unreachable = self._validate_reachability(plan.nodes, actual_edges)
+            errors.extend(unreachable["errors"])
+            warnings.extend(unreachable["warnings"])
             errors.extend(self._validate_app_relations(actual_edges))
             errors.extend(self._validate_experience_references())
-            errors.extend(self._validate_revision_source_ownership())
+            errors.extend(self._validate_revision_source_ownership(actual_edges))
             errors.extend(self._validate_surfaces(actual_edges))
-            return GraphShapeReport(errors=_dedupe(errors), warnings=warnings)
+            return GraphShapeReport(errors=_dedupe(errors), warnings=_dedupe(warnings))
 
     def repair_graph_edges(self) -> GraphShapeReport:
         self.store.bootstrap_schema()
@@ -655,13 +614,14 @@ class GraphIntegrityService:
         active_edges: list[tuple[NodeRef, str, NodeRef | None]] = []
         for declaration in REVISION_DECLARATIONS:
             revisions = getattr(self.records, declaration.revision_collection).values()
+            stable_collection = getattr(self.records, declaration.stable_collection)
             for revision in revisions:
+                stable_id = getattr(revision, declaration.revision_owner_field)
+                if stable_collection.get(stable_id) is None:
+                    continue
                 edges.append(
                     (
-                        node_ref(
-                            declaration.stable_label,
-                            id=getattr(revision, declaration.revision_owner_field),
-                        ),
+                        node_ref(declaration.stable_label, id=stable_id),
                         "HAS_REVISION",
                         node_ref(declaration.revision_label, id=revision.id),
                     )
@@ -692,40 +652,37 @@ class GraphIntegrityService:
 
     def _reference_edges(self) -> list[tuple[NodeRef, str, NodeRef]]:
         edges: list[tuple[NodeRef, str, NodeRef]] = []
-        for revision in self.records.system_revisions.values():
-            edges.append(
-                (
-                    node_ref("SystemRevision", id=revision.id),
-                    "HAS_SOURCE_TREE",
-                    node_ref("SourceTree", id=revision.source_tree_id),
-                )
-            )
+        for label, collection in (
+            ("SystemRevision", self.records.system_revisions),
+            ("ApplicationRevision", self.records.revisions),
+            ("ExperienceRevision", self.records.experience_revisions),
+        ):
+            for revision in collection.values():
+                revision_ref = node_ref(label, id=revision.id)
+                for edge in self.store.list_edges(revision_ref, "HAS_SOURCE_TREE"):
+                    edges.append((revision_ref, "HAS_SOURCE_TREE", edge.to_ref))
+                for edge_type in (
+                    "HAS_ACTION_REVISION",
+                    "HAS_OBJECT_TYPE_REVISION",
+                    "HAS_RELATION_TYPE_REVISION",
+                    "HAS_TRIGGER_REVISION",
+                    "HAS_TEST",
+                    "DECLARES_DEPENDENCY",
+                    "DECLARES_SURFACE",
+                ):
+                    for edge in self.store.list_edges(revision_ref, edge_type):
+                        edges.append((revision_ref, edge_type, edge.to_ref))
         for revision in self.records.revisions.values():
-            revision_ref = node_ref("ApplicationRevision", id=revision.id)
-            edges.append(
-                (
-                    revision_ref,
-                    "HAS_SOURCE_TREE",
-                    node_ref("SourceTree", id=revision.source_tree_id),
-                )
-            )
             if revision.parent_revision_id is not None:
                 edges.append(
                     (
-                        revision_ref,
+                        node_ref("ApplicationRevision", id=revision.id),
                         "PARENT_REVISION",
                         node_ref("ApplicationRevision", id=revision.parent_revision_id),
                     )
                 )
         for revision in self.records.experience_revisions.values():
             revision_ref = node_ref("ExperienceRevision", id=revision.id)
-            edges.append(
-                (
-                    revision_ref,
-                    "HAS_SOURCE_TREE",
-                    node_ref("SourceTree", id=revision.source_tree_id),
-                )
-            )
             if revision.parent_revision_id is not None:
                 edges.append(
                     (
@@ -745,49 +702,29 @@ class GraphIntegrityService:
                 )
                 for access in revision.application_access
             )
-        for tree in self.records.source_trees.values():
-            if tree.derived_from_tree_id is not None:
-                edges.append(
-                    (
-                        node_ref("SourceTree", id=tree.id),
-                        (
-                            "SNAPSHOT_OF"
-                            if tree.status == "immutable_snapshot"
-                            else "CLONED_FROM"
-                        ),
-                        node_ref("SourceTree", id=tree.derived_from_tree_id),
-                    )
-                )
+        # HAS_FILE is store-authoritative (path/role/language live on the
+        # edge). It is validated separately and must not be reconstructed
+        # without those properties.
         for revision in self.records.relation_type_revisions.values():
             revision_ref = node_ref("RelationTypeRevision", id=revision.id)
-            edges.extend(
-                [
+            if self.records.object_types.get(revision.from_object_type_id) is not None:
+                edges.append(
                     (
                         revision_ref,
                         "FROM_TYPE",
                         node_ref("ObjectType", id=revision.from_object_type_id),
-                    ),
+                    )
+                )
+            if self.records.object_types.get(revision.to_object_type_id) is not None:
+                edges.append(
                     (
                         revision_ref,
                         "TO_TYPE",
                         node_ref("ObjectType", id=revision.to_object_type_id),
-                    ),
-                ]
-            )
+                    )
+                )
         for revision in self.records.action_revisions.values():
             revision_ref = node_ref("ActionRevision", id=revision.id)
-            edges.extend(
-                (
-                    revision_ref,
-                    "USES_SOURCE",
-                    node_ref(
-                        "SourceFile",
-                        source_tree_id=revision.source_tree_id,
-                        path=path,
-                    ),
-                )
-                for path in revision.source_paths
-            )
             edges.extend(
                 (
                     revision_ref,
@@ -795,6 +732,7 @@ class GraphIntegrityService:
                     node_ref("RuntimeDependency", id=dependency_id),
                 )
                 for dependency_id in revision.runtime_dependency_ids
+                if self.records.runtime_dependencies.get(dependency_id) is not None
             )
             edges.extend(
                 (
@@ -803,33 +741,16 @@ class GraphIntegrityService:
                     node_ref("SecretReference", id=secret_id),
                 )
                 for secret_id in revision.secret_refs
-            )
-        for surface in self.records.experience_surfaces.values():
-            surface_ref = NodeRef(
-                "ExperienceSurface",
-                {
-                    "experience_revision_id": surface.experience_revision_id,
-                    "surface_id": surface.surface_id,
-                },
-            )
-            edges.extend(
-                (
-                    surface_ref,
-                    "USES_SOURCE",
-                    node_ref(
-                        "SourceFile",
-                        source_tree_id=surface.source_tree_id,
-                        path=path,
-                    ),
-                )
-                for path in surface.source_paths
+                if self.records.secret_references.get(secret_id) is not None
             )
         for revision in self.records.trigger_revisions.values():
+            if self.records.actions.get(revision.action_id) is None:
+                continue
             edges.append(
                 (
                     node_ref("TriggerRevision", id=revision.id),
                     "INVOKES",
-                    node_ref("ActionRevision", id=revision.action_revision_id),
+                    node_ref("Action", id=revision.action_id),
                 )
             )
         for obj in self.records.objects.values():
@@ -885,11 +806,13 @@ class GraphIntegrityService:
                     )
                 )
         for test in self.records.test_cases.values():
+            if self.records.actions.get(test.action_id) is None:
+                continue
             edges.append(
                 (
                     node_ref("TestCase", id=test.id),
                     "TESTS",
-                    node_ref("ActionRevision", id=test.action_revision_id),
+                    node_ref("Action", id=test.action_id),
                 )
             )
         for checkpoint in self.records.checkpoints.values():
@@ -955,35 +878,6 @@ class GraphIntegrityService:
                         node_ref("GraphCheckpoint", id=audit.checkpoint_id),
                     )
                 )
-        for artifact in self.records.build_artifacts.values():
-            if (
-                artifact.owner_kind == "ExperienceRevision"
-                and artifact.surface_id is not None
-            ):
-                edges.append(
-                    (
-                        NodeRef(
-                            "ExperienceSurface",
-                            {
-                                "experience_revision_id": artifact.owner_id,
-                                "surface_id": artifact.surface_id,
-                            },
-                        ),
-                        "BUILDS_TO",
-                        node_ref("BuildArtifact", id=artifact.id),
-                    )
-                )
-            action_revision_id = artifact.metadata.get("action_revision_id")
-            if artifact.artifact_type == "materialized_source" and isinstance(
-                action_revision_id, str
-            ):
-                edges.append(
-                    (
-                        node_ref("ActionRevision", id=action_revision_id),
-                        "MATERIALIZED_TO",
-                        node_ref("BuildArtifact", id=artifact.id),
-                    )
-                )
         return edges
 
     def _validate_experience_references(self) -> list[str]:
@@ -1023,103 +917,131 @@ class GraphIntegrityService:
                             )
         return errors
 
-    def _validate_revision_source_ownership(self) -> list[str]:
+    def _validate_revision_source_ownership(
+        self, actual_edges: list[EdgeRecord]
+    ) -> list[str]:
         errors: list[str] = []
-        for revision in self.records.system_revisions.values():
-            tree = self.records.source_trees.get(revision.source_tree_id)
-            if (
-                tree is None
-                or tree.owner_kind != "SystemRevision"
-                or tree.owner_id != revision.id
-            ):
-                errors.append(
-                    "invalid SystemRevision source ownership: "
-                    f"{revision.id}->{revision.source_tree_id}"
+        seen_paths: dict[str, set[str]] = {}
+        for label, collection in (
+            ("SystemRevision", self.records.system_revisions),
+            ("ApplicationRevision", self.records.revisions),
+            ("ExperienceRevision", self.records.experience_revisions),
+        ):
+            for revision in collection.values():
+                trees = _matching_edges(
+                    actual_edges,
+                    node_ref(label, id=revision.id),
+                    "HAS_SOURCE_TREE",
+                    None,
                 )
-        for revision in self.records.revisions.values():
-            tree = self.records.source_trees.get(revision.source_tree_id)
-            if (
-                tree is None
-                or tree.owner_kind != "ApplicationRevision"
-                or tree.owner_id != revision.id
+                if len(trees) != 1:
+                    errors.append(
+                        f"{label} {revision.id} must have exactly one HAS_SOURCE_TREE"
+                    )
+                    continue
+                tree = self.records.source_trees.get(trees[0].to_ref.identity["id"])
+                if tree is None:
+                    errors.append(
+                        f"missing SourceTree for {label} {revision.id}"
+                    )
+                    continue
+                if tree.status == "draft":
+                    if tree.id != f"{revision.id}.source" or tree.owner_id != revision.id:
+                        errors.append(
+                            f"invalid working SourceTree for {label} {revision.id}: "
+                            f"{tree.id}"
+                        )
+                elif tree.status != "interned" or tree.id != tree.tree_hash:
+                    errors.append(
+                        f"invalid interned SourceTree for {label} {revision.id}: "
+                        f"{tree.id}"
+                    )
+        for tree in self.records.source_trees.values():
+            paths: set[str] = set()
+            for edge in _matching_edges(
+                actual_edges,
+                node_ref("SourceTree", id=tree.id),
+                "HAS_FILE",
+                None,
             ):
-                errors.append(
-                    "invalid ApplicationRevision source ownership: "
-                    f"{revision.id}->{revision.source_tree_id}"
-                )
-        for revision in self.records.experience_revisions.values():
-            tree = self.records.source_trees.get(revision.source_tree_id)
-            if (
-                tree is None
-                or tree.owner_kind != "ExperienceRevision"
-                or tree.owner_id != revision.id
-            ):
-                errors.append(
-                    "invalid ExperienceRevision source ownership: "
-                    f"{revision.id}->{revision.source_tree_id}"
-                )
+                path = str(edge.props.get("path") or "")
+                if not path or path in paths:
+                    errors.append(
+                        f"invalid HAS_FILE path on {tree.id}: {path or '<empty>'}"
+                    )
+                paths.add(path)
+            seen_paths[tree.id] = paths
         return errors
 
     def _validate_surfaces(self, actual_edges: list[EdgeRecord]) -> list[str]:
         errors: list[str] = []
         browser_mounts: dict[str, dict[str, str]] = {}
-        for surface in self.records.experience_surfaces.values():
-            revision = self.records.experience_revisions.get(
-                surface.experience_revision_id
+        for revision in self.records.experience_revisions.values():
+            revision_ref = node_ref("ExperienceRevision", id=revision.id)
+            declared = _matching_edges(
+                actual_edges, revision_ref, "DECLARES_SURFACE", None
             )
-            if revision is None:
-                errors.append(
-                    "missing Surface ExperienceRevision: "
-                    f"{surface.experience_revision_id}/{surface.surface_id}"
+            surface_ids: set[str] = set()
+            for edge in declared:
+                surface = self.records.experience_surfaces.get(
+                    edge.to_ref.identity["id"]
                 )
-                continue
-            if surface.source_tree_id != revision.source_tree_id:
-                errors.append(
-                    "invalid Surface source tree: "
-                    f"{surface.experience_revision_id}/{surface.surface_id}"
-                    f"->{surface.source_tree_id}"
-                )
-            if surface.surface_type == "browser":
-                mount_path = surface.config["mount_path"]
-                mounts = browser_mounts.setdefault(surface.experience_revision_id, {})
-                existing = mounts.get(mount_path)
-                if existing is not None:
+                if surface is None:
                     errors.append(
-                        "duplicate browser Surface mount_path: "
-                        f"{surface.experience_revision_id}:{mount_path} "
-                        f"({existing}, {surface.surface_id})"
+                        f"missing ExperienceSurface declared by {revision.id}"
                     )
-                mounts[mount_path] = surface.surface_id
-            surface_ref = NodeRef(
-                "ExperienceSurface",
-                {
-                    "experience_revision_id": surface.experience_revision_id,
-                    "surface_id": surface.surface_id,
-                },
-            )
-            forbidden = [
-                edge
-                for edge in actual_edges
-                if (edge.from_ref == surface_ref or edge.to_ref == surface_ref)
-                and edge.type in {"HAS_REVISION", "ACTIVE_REVISION"}
-            ]
-            if forbidden:
-                errors.append(
-                    "ExperienceSurface must not have revision or active edges: "
-                    f"{surface.experience_revision_id}/{surface.surface_id}"
-                )
+                    continue
+                if surface.surface_id in surface_ids:
+                    errors.append(
+                        f"duplicate surface_id {surface.surface_id} on {revision.id}"
+                    )
+                surface_ids.add(surface.surface_id)
+                if surface.surface_type == "browser":
+                    mount_path = surface.config["mount_path"]
+                    mounts = browser_mounts.setdefault(revision.id, {})
+                    existing = mounts.get(mount_path)
+                    if existing is not None:
+                        errors.append(
+                            "duplicate browser Surface mount_path: "
+                            f"{revision.id}:{mount_path} "
+                            f"({existing}, {surface.surface_id})"
+                        )
+                    mounts[mount_path] = surface.surface_id
+                forbidden = [
+                    item
+                    for item in actual_edges
+                    if (
+                        item.from_ref == edge.to_ref or item.to_ref == edge.to_ref
+                    )
+                    and item.type in {"HAS_REVISION", "ACTIVE_REVISION"}
+                ]
+                if forbidden:
+                    errors.append(
+                        "ExperienceSurface must not have revision or active edges: "
+                        f"{surface.surface_id}"
+                    )
         return errors
 
     def _validate_reachability(
         self, nodes: list[NodeRef], edges: list[EdgeRecord]
-    ) -> list[str]:
+    ) -> dict[str, list[str]]:
+        interned_labels = {
+            "SourceContent",
+            "ActionRevision",
+            "ObjectTypeRevision",
+            "RelationTypeRevision",
+            "TriggerRevision",
+            "TestCase",
+            "RuntimeDependency",
+            "ExperienceSurface",
+        }
         root_key = _ref_key(node_ref("N4XRoot", id="n4x"))
         node_keys = {_ref_key(ref) for ref in nodes}
         if (
             root_key not in node_keys
             or self.store.get_node("N4XRoot", {"id": "n4x"}) is None
         ):
-            return ["missing N4XRoot node"]
+            return {"errors": ["missing N4XRoot node"], "warnings": []}
         adjacency: dict[tuple[Any, ...], set[tuple[Any, ...]]] = {}
         for edge in edges:
             adjacency.setdefault(_ref_key(edge.from_ref), set()).add(
@@ -1133,11 +1055,21 @@ class GraphIntegrityService:
                 if target not in reachable:
                     reachable.add(target)
                     pending.append(target)
-        return [
-            f"unreachable node: {_format_ref(ref)}"
-            for ref in nodes
-            if _ref_key(ref) != root_key and _ref_key(ref) not in reachable
-        ]
+        errors: list[str] = []
+        warnings: list[str] = []
+        for ref in nodes:
+            if _ref_key(ref) == root_key or _ref_key(ref) in reachable:
+                continue
+            message = f"unreachable node: {_format_ref(ref)}"
+            interned_tree = False
+            if ref.label == "SourceTree":
+                tree = self.records.source_trees.get(ref.identity.get("id", ""))
+                interned_tree = tree is not None and tree.status == "interned"
+            if ref.label in interned_labels or interned_tree:
+                warnings.append(message)
+            else:
+                errors.append(message)
+        return {"errors": errors, "warnings": warnings}
 
     def _validate_app_relations(self, edges: list[EdgeRecord]) -> list[str]:
         errors: list[str] = []

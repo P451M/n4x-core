@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Protocol
 
+from n4x.graph.bindings import RevisionBindings
 from n4x.graph.service_base import transactional
 from n4x.graph.store import node_ref
 from n4x.graph.uow import GraphUnitOfWork
@@ -19,7 +20,7 @@ from n4x.system.checkpoints import CheckpointService
 
 
 class ActivationSourcePort(Protocol):
-    def snapshot_tree(self, source_tree_id: str, revision_id: str): ...
+    def intern_tree(self, revision_id: str): ...
 
     def read_source_file(self, source_tree_id: str, path: str): ...
 
@@ -31,7 +32,9 @@ class ActivationInvocationPort(Protocol):
         self, application_revision_id: str
     ) -> dict[str, Any]: ...
 
-    def run_migration(self, action_revision_id: str) -> Any: ...
+    def run_migration(
+        self, application_revision_id: str, action_revision_id: str
+    ) -> Any: ...
 
 
 class ActivationDefinitionPort(Protocol):
@@ -79,34 +82,33 @@ class ActivationService:
         self.checkpoints = checkpoints or CheckpointService(uow)
         self.cypher_gateway = cypher_gateway
         self.process_pool = process_pool
+        self.bindings = RevisionBindings(uow)
 
     @transactional
     def validate(self, application_revision_id: str) -> ValidationReport:
         errors: list[str] = []
         app_revision = self.records.revisions[application_revision_id]
-        revision_sets = (
-            ("ActionRevision", self.records.action_revisions.values(), "action_id"),
-            (
-                "TriggerRevision",
-                self.records.trigger_revisions.values(),
+        bound = {
+            "ActionRevision": (
+                self.bindings.action_revisions(app_revision.id),
+                "action_id",
+            ),
+            "TriggerRevision": (
+                self.bindings.trigger_revisions(app_revision.id),
                 "trigger_id",
             ),
-            (
-                "ObjectTypeRevision",
-                self.records.object_type_revisions.values(),
+            "ObjectTypeRevision": (
+                self.bindings.object_type_revisions(app_revision.id),
                 "object_type_id",
             ),
-            (
-                "RelationTypeRevision",
-                self.records.relation_type_revisions.values(),
+            "RelationTypeRevision": (
+                self.bindings.relation_type_revisions(app_revision.id),
                 "relation_type_id",
             ),
-        )
-        for label, revisions, owner_field in revision_sets:
+        }
+        for label, (revisions, owner_field) in bound.items():
             counts: dict[str, int] = {}
             for revision in revisions:
-                if revision.application_revision_id != app_revision.id:
-                    continue
                 stable_id = getattr(revision, owner_field)
                 counts[stable_id] = counts.get(stable_id, 0) + 1
             for stable_id, count in counts.items():
@@ -115,10 +117,11 @@ class ActivationService:
                         f"{label}: duplicate {owner_field} {stable_id} "
                         f"on {app_revision.id}"
                     )
+        tree_id = self.bindings.tree_id(app_revision.id)
         for revision in self._action_revisions(app_revision.id):
             for path in revision.source_paths:
                 try:
-                    self.source.read_source_file(revision.source_tree_id, path)
+                    self.source.read_source_file(tree_id, path)
                 except Exception as exc:  # noqa: BLE001
                     errors.append(f"{revision.id}:{path}: {type(exc).__name__}: {exc}")
             if revision.kind == "migration":
@@ -130,12 +133,9 @@ class ActivationService:
                     )
         object_type_ids = {
             item.object_type_id
-            for item in self.records.object_type_revisions.values()
-            if item.application_revision_id == app_revision.id
+            for item in self.bindings.object_type_revisions(app_revision.id)
         }
-        for revision in self.records.relation_type_revisions.values():
-            if revision.application_revision_id != app_revision.id:
-                continue
+        for revision in self.bindings.relation_type_revisions(app_revision.id):
             if revision.from_object_type_id not in object_type_ids:
                 errors.append(f"{revision.id}: missing from object type revision")
             if revision.to_object_type_id not in object_type_ids:
@@ -210,27 +210,7 @@ class ActivationService:
         if revision.status == "draft":
             revision = revision.model_copy(update={"status": "validating"})
             self.records.revisions.save(revision)
-        tree = self.records.source_trees[revision.source_tree_id]
-        if tree.status == "immutable_snapshot":
-            snapshot = tree
-        else:
-            snapshot = self.source.snapshot_tree(revision.source_tree_id, revision.id)
-            self.records.revisions.save(
-                revision.model_copy(update={"source_tree_id": snapshot.id})
-            )
-            self.store.replace_single_edge(
-                node_ref("ApplicationRevision", id=revision.id),
-                "HAS_SOURCE_TREE",
-                node_ref("SourceTree", id=snapshot.id),
-            )
-        for current in self._action_revisions(revision.id):
-            updated = current.model_copy(update={"source_tree_id": snapshot.id})
-            self.records.action_revisions.save(updated)
-            self.definitions.relink_action_revision(
-                revision.application_id,
-                self.records.actions[updated.action_id],
-                updated,
-            )
+        self.source.intern_tree(revision.id)
 
     def _checkpoint_if_mutating(self, application_revision_id: str) -> str | None:
         mutations = any(
@@ -248,7 +228,7 @@ class ActivationService:
 
     def _run_migrations(self, application_revision_id: str) -> None:
         for revision in self._migrations(application_revision_id):
-            self.invocations.run_migration(revision.id)
+            self.invocations.run_migration(application_revision_id, revision.id)
 
     def _restore_checkpoint(self, checkpoint_id: str | None) -> str | None:
         if checkpoint_id is None:
@@ -323,32 +303,28 @@ class ActivationService:
             expected_revision_id=application.active_revision_id,
         )
         self._activate_revision_set(
-            activated.id,
-            self.records.action_revisions.values(),
+            self.bindings.action_revisions(activated.id),
             "action_id",
             "Action",
             self.records.actions,
             "ActionRevision",
         )
         self._activate_revision_set(
-            activated.id,
-            self.records.trigger_revisions.values(),
+            self.bindings.trigger_revisions(activated.id),
             "trigger_id",
             "Trigger",
             self.records.triggers,
             "TriggerRevision",
         )
         self._activate_revision_set(
-            activated.id,
-            self.records.object_type_revisions.values(),
+            self.bindings.object_type_revisions(activated.id),
             "object_type_id",
             "ObjectType",
             self.records.object_types,
             "ObjectTypeRevision",
         )
         self._activate_revision_set(
-            activated.id,
-            self.records.relation_type_revisions.values(),
+            self.bindings.relation_type_revisions(activated.id),
             "relation_type_id",
             "RelationType",
             self.records.relation_types,
@@ -358,7 +334,6 @@ class ActivationService:
 
     def _activate_revision_set(
         self,
-        application_revision_id: str,
         revisions: list,
         owner_field: str,
         stable_label: str,
@@ -366,8 +341,6 @@ class ActivationService:
         revision_label: str,
     ) -> None:
         for revision in revisions:
-            if revision.application_revision_id != application_revision_id:
-                continue
             stable = stable_records[getattr(revision, owner_field)]
             stable_records.save(
                 stable.model_copy(update={"active_revision_id": revision.id})
@@ -380,21 +353,26 @@ class ActivationService:
 
     def _action_revisions(self, application_revision_id: str) -> list[ActionRevision]:
         return sorted(
-            (
-                item
-                for item in self.records.action_revisions.values()
-                if item.application_revision_id == application_revision_id
-            ),
+            self.bindings.action_revisions(application_revision_id),
             key=lambda item: item.id,
         )
 
     def _migrations(self, application_revision_id: str) -> list[ActionRevision]:
-        return [
-            item
+        current = {
+            item.action_id: item
             for item in self._action_revisions(application_revision_id)
             if item.kind == "migration"
-            and (
-                item.created_by != "revision_clone"
-                or item.migration_metadata.get("run_when_cloned", False)
-            )
+        }
+        target = self.records.revisions[application_revision_id]
+        parent_ids: dict[str, str] = {}
+        if target.parent_revision_id is not None:
+            parent_ids = {
+                item.action_id: item.id
+                for item in self._action_revisions(target.parent_revision_id)
+                if item.kind == "migration"
+            }
+        return [
+            item
+            for action_id, item in current.items()
+            if parent_ids.get(action_id) != item.id
         ]

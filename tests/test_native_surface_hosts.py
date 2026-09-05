@@ -46,7 +46,7 @@ def test_browser_surfaces_select_longest_mount_and_serve_spa_with_csp(
     system = create_test_runtime()
     experience = system.create_experience("native-browser", "Native Browser")
     revision = system.create_experience_revision(experience.id, ui_profile="none")
-    _source(system, revision.source_tree_id)
+    _source(system, revision.id)
     root_surface = system.create_experience_surface(
         revision.id,
         "root",
@@ -118,7 +118,7 @@ def test_development_deployment_serves_draft_surface_with_runtime_context(
         ui_profile="none",
         application_access=[{"application_id": application.id}],
     )
-    _source(system, revision.source_tree_id)
+    _source(system, revision.id)
     surface = system.create_experience_surface(
         revision.id,
         "browser",
@@ -128,7 +128,7 @@ def test_development_deployment_serves_draft_surface_with_runtime_context(
         config={"mount_path": "/"},
     )
     artifact = _browser_artifact(tmp_path / "preview", "preview")
-    system.surfaces.build_input_hash = lambda _surface: "current"
+    system.surfaces.build_input_hash = lambda _revision_id, _surface: "current"
     with system.uow:
         system.graph.build_artifacts.save(
             artifact.model_copy(
@@ -180,7 +180,7 @@ async def _assert_development_mcp_surface(tmp_path: Path) -> None:
         ui_profile="none",
         application_access=[{"application_id": application.id}],
     )
-    _source(system, revision.source_tree_id)
+    _source(system, revision.id)
     surface = system.create_experience_surface(
         revision.id,
         "assistant",
@@ -194,7 +194,7 @@ async def _assert_development_mcp_surface(tmp_path: Path) -> None:
         "<html><head></head><body>development-mcp</body></html>",
         encoding="utf-8",
     )
-    system.surfaces.build_input_hash = lambda _surface: "current"
+    system.surfaces.build_input_hash = lambda _revision_id, _surface: "current"
     with system.uow:
         system.graph.build_artifacts.save(
             BuildArtifact(
@@ -262,7 +262,7 @@ async def _assert_mcp_surface_provider(tmp_path: Path) -> None:
     app_revision = system.create_application_revision(application.id)
     system.create_object_type(app_revision.id, "native.Item", name="Item")
     system.source.write_source_file(
-        app_revision.source_tree_id,
+        app_revision.id,
         "actions/run.py",
         "def run(ctx, input):\n    return {'echo': input['value']}\n",
         role="action",
@@ -289,7 +289,7 @@ async def _assert_mcp_surface_provider(tmp_path: Path) -> None:
             }
         ],
     )
-    _source(system, revision.source_tree_id)
+    _source(system, revision.id)
     browser = system.create_experience_surface(
         revision.id,
         "browser",
@@ -408,7 +408,7 @@ def test_pwa_manifest_is_bound_to_live_document_base(tmp_path: Path) -> None:
     system = create_test_runtime()
     experience = system.create_experience("pwa-ui", "PWA UI")
     revision = system.create_experience_revision(experience.id, ui_profile="none")
-    _source(system, revision.source_tree_id)
+    _source(system, revision.id)
     surface = system.create_experience_surface(
         revision.id,
         "browser",
@@ -457,7 +457,7 @@ def test_pwa_manifest_resolves_relative_start_url_and_rejects_escape(
     system = create_test_runtime()
     experience = system.create_experience("pwa-mail", "PWA Mail")
     revision = system.create_experience_revision(experience.id, ui_profile="none")
-    _source(system, revision.source_tree_id)
+    _source(system, revision.id)
     surface = system.create_experience_surface(
         revision.id,
         "browser",
@@ -500,7 +500,7 @@ def test_development_pwa_manifest_uses_deployment_document_base(
         ui_profile="none",
         application_access=[{"application_id": application.id}],
     )
-    _source(system, revision.source_tree_id)
+    _source(system, revision.id)
     surface = system.create_experience_surface(
         revision.id,
         "browser",
@@ -514,7 +514,7 @@ def test_development_pwa_manifest_uses_deployment_document_base(
         json.dumps({"start_url": "/"}),
         encoding="utf-8",
     )
-    system.surfaces.build_input_hash = lambda _surface: "current"
+    system.surfaces.build_input_hash = lambda _revision_id, _surface: "current"
     with system.uow:
         system.graph.build_artifacts.save(
             artifact.model_copy(
@@ -590,7 +590,7 @@ def _browser_artifact(root: Path, label: str) -> BuildArtifact:
 
 
 def _activate_with_artifacts(system, experience, revision, entries) -> None:
-    system.surfaces.build_input_hash = lambda _surface: "current"
+    system.surfaces.build_input_hash = lambda _revision_id, _surface: "current"
     with system.uow:
         system.graph.experience_revisions.save(
             revision.model_copy(update={"status": "active"})

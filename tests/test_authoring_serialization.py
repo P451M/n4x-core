@@ -11,6 +11,7 @@ import pytest
 from n4x.graph.neo4j import Neo4jGraph
 from n4x.graph.store import Neo4jGraphStore, NodeRef
 from n4x.graph.uow import GraphUnitOfWork, transactional
+from n4x.kernel.errors import TransientGraphConflictError
 from n4x.kernel.models import Application
 from n4x.system.applications import Applications
 from n4x.source_store.service import SourceStore
@@ -136,7 +137,7 @@ def test_concurrent_independent_application_revisions_serialize(
 
 
 @pytest.mark.neo4j
-def test_concurrent_same_application_revisions_get_distinct_ids(
+def test_concurrent_same_application_revisions_reuse_draft(
     neo4j_authoring_store: tuple[Neo4jGraphStore, str],
 ) -> None:
     store, prefix = neo4j_authoring_store
@@ -152,11 +153,7 @@ def test_concurrent_same_application_revisions_get_distinct_ids(
         ]
         revisions = [future.result(timeout=10) for future in futures]
 
-    assert sorted(revision.id for revision in revisions) == [
-        f"{application_id}@1",
-        f"{application_id}@2",
-        f"{application_id}@3",
-    ]
+    assert {revision.id for revision in revisions} == {f"{application_id}@1"}
 
 
 @pytest.mark.neo4j
@@ -191,3 +188,44 @@ def test_failed_authoring_transaction_releases_root_lock(
     assert succeeded.id == succeeding_id
     assert store.get_node("Application", {"id": failed_id}) is None
     assert store.get_node("Application", {"id": succeeding_id}) is not None
+
+
+def test_memory_cypher_rejects_map_property_values() -> None:
+    store = InMemoryGraphStore()
+    with pytest.raises(TypeError, match="primitive types"):
+        store.run_cypher(
+            """
+            MERGE (n:ApplicationObject {
+                application_id: $application_id,
+                data_space_id: $data_space_id,
+                id: $id
+            })
+            SET n.values = $values
+            RETURN n.id AS id
+            """,
+            {
+                "application_id": "app",
+                "data_space_id": "production",
+                "id": "item",
+                "values": {"name": "p"},
+            },
+        )
+
+
+def test_transactional_retries_transient_graph_conflict() -> None:
+    store = InMemoryGraphStore()
+    attempts = {"count": 0}
+
+    class Probe:
+        def __init__(self) -> None:
+            self.uow = GraphUnitOfWork(store)
+
+        @transactional
+        def write(self) -> str:
+            attempts["count"] += 1
+            if attempts["count"] < 3:
+                raise TransientGraphConflictError("deadlock")
+            return "ok"
+
+    assert Probe().write() == "ok"
+    assert attempts["count"] == 3

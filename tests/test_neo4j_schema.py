@@ -46,7 +46,7 @@ def test_neo4j_schema_statements_are_defined() -> None:
     assert any(
         "n4x_experience_revision_id" in statement for statement in statements
     )
-    assert any("n4x_experience_surface_identity" in statement for statement in statements)
+    assert any("n4x_experience_surface_id" in statement for statement in statements)
     assert any("SourceTree" in statement for statement in statements)
     assert any("ActionRevision" in statement for statement in statements)
     assert any("RuntimeDependency" in statement for statement in statements)
@@ -66,13 +66,12 @@ def test_surface_node_identity_excludes_non_identity_properties() -> None:
     assert _node_identity(
         "ExperienceSurface",
         {
-            "experience_revision_id": "office@1",
+            "id": "sha256:surface",
             "surface_id": "browser",
             "source_paths": ["src/main.tsx"],
         }
     ) == {
-        "experience_revision_id": "office@1",
-        "surface_id": "browser",
+        "id": "sha256:surface",
     }
     assert _node_identity(
         "ApplicationObject",

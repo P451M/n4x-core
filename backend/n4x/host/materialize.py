@@ -22,7 +22,7 @@ def materialize_from_graph(
     if destination.exists():
         shutil.rmtree(destination)
     destination.mkdir(parents=True)
-    for path, content in graph.list_source_files(revision.source_tree_id):
+    for path, content in graph.list_source_files(graph.tree_id(revision.id)):
         target = destination / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")

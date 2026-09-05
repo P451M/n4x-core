@@ -822,7 +822,6 @@ def _author_notes(
     """Author and activate the complete Notes application through generic MCP."""
     app = harness.run("create_application", application_id=app_id, name="Notes")
     revision = harness.run("create_application_revision", application_id=app["id"])
-    source_tree_id = revision["source_tree_id"]
     revision_id = revision["id"]
     notebook = harness.run(
         "create_object_type",
@@ -870,7 +869,7 @@ def _author_notes(
     )
     harness.run(
         "write_source_file",
-        source_tree_id=source_tree_id,
+        revision_id=revision_id,
         path="actions/notes.py",
         role="action",
         language="python",
@@ -946,7 +945,7 @@ def test_notes_is_reconstructable_through_mcp(harness: McpAuthoringHarness) -> N
     next_revision = harness.run("create_application_revision", application_id=app_id)
     harness.run(
         "write_source_file",
-        source_tree_id=next_revision["source_tree_id"],
+        revision_id=next_revision["id"],
         path="migrations/archived.py",
         role="migration",
         language="python",

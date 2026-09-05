@@ -6,6 +6,7 @@ import uuid
 from datetime import timedelta
 from typing import Any, Literal, Protocol
 
+from n4x.graph.bindings import RevisionBindings
 from n4x.graph.store import node_ref
 from n4x.graph.uow import GraphUnitOfWork
 from n4x.kernel.errors import FileDeliveryError, ValidationFailure
@@ -77,6 +78,7 @@ class DevelopmentDeploymentService:
         self.supervisor = supervisor
         self.file_delivery = file_delivery
         self.process_pool = process_pool
+        self.bindings = RevisionBindings(uow)
 
     @transactional
     def create(
@@ -114,9 +116,9 @@ class DevelopmentDeploymentService:
 
         application_revisions = {}
         candidate_hashes = {
-            f"experience:{experience_revision.id}": self.records.source_trees[
-                experience_revision.source_tree_id
-            ].tree_hash
+            f"experience:{experience_revision.id}": self.bindings.tree(
+                experience_revision.id
+            ).tree_hash
         }
         for application_id, revision_id in application_revision_ids.items():
             revision = self.records.revisions[revision_id]
@@ -130,7 +132,7 @@ class DevelopmentDeploymentService:
                 )
             application_revisions[application_id] = revision
             candidate_hashes[f"application:{application_id}"] = (
-                self.records.source_trees[revision.source_tree_id].tree_hash
+                self.bindings.tree(revision.id).tree_hash
             )
 
         deployment_id = str(uuid.uuid4())
@@ -405,20 +407,14 @@ class DevelopmentDeploymentService:
                 raise ValidationFailure(
                     f"Action does not belong to Application: {action_id}"
                 )
-            revision = next(
-                (
-                    candidate
-                    for candidate in self.records.action_revisions.values()
-                    if candidate.action_id == action_id
-                    and candidate.application_revision_id
-                    == context.application_revision_id
-                ),
-                None,
-            )
-            if revision is None:
+            try:
+                revision = self.bindings.action_revision(
+                    context.application_revision_id, action_id
+                )
+            except KeyError as exc:
                 raise ValidationFailure(
                     f"Action has no candidate revision: {action_id}"
-                )
+                ) from exc
             if revision.kind == "migration":
                 raise ValidationFailure(
                     "migration revisions run only through activation"
@@ -471,17 +467,15 @@ class DevelopmentDeploymentService:
             deployment.experience_revision_id
         ]
         current = {
-            f"experience:{experience.id}": self.records.source_trees[
-                experience.source_tree_id
-            ].tree_hash
+            f"experience:{experience.id}": self.bindings.tree(experience.id).tree_hash
         }
         for application_id, revision_id in (
             deployment.application_revision_ids.items()
         ):
             revision = self.records.revisions[revision_id]
-            current[f"application:{application_id}"] = (
-                self.records.source_trees[revision.source_tree_id].tree_hash
-            )
+            current[f"application:{application_id}"] = self.bindings.tree(
+                revision.id
+            ).tree_hash
         if current != deployment.candidate_hashes:
             raise ValidationFailure(
                 "development deployment candidate changed; redeploy required"

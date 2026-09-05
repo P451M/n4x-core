@@ -113,7 +113,9 @@ def create_control_routes(host: Any) -> list[Route]:
             {
                 "runtime": "n4x-host",
                 "revision_id": None if enabled is None else enabled.id,
-                "source_tree_id": None if enabled is None else enabled.source_tree_id,
+                "source_tree_id": None
+                if enabled is None
+                else host.system_graph.tree_id(enabled.id),
                 "content_root": None if enabled is None else enabled.content_root,
                 "worker": None
                 if worker is None

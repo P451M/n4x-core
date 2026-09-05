@@ -14,7 +14,7 @@ def test_action_runs_with_per_revision_uv_environment_and_dependency_lock() -> N
         revision.id, "python", "packaging", "==25.0"
     )
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/check_packaging.py",
         (
             "from packaging.version import parse\n\n"
@@ -34,7 +34,9 @@ def test_action_runs_with_per_revision_uv_environment_and_dependency_lock() -> N
         input_schema={"type": "object", "required": ["version"]},
     )
 
-    invocation = system.run_draft_action(action.id, {"version": "1.0.0"})
+    invocation = system.run_draft_action(
+        revision.id, action.action_id, {"version": "1.0.0"}
+    )
 
     assert invocation.status == "succeeded"
     assert invocation.output == {"normalized": "1.0.0"}
@@ -61,7 +63,7 @@ def test_dependency_resolution_failure_blocks_activation() -> None:
         revision.id, "python", "not a valid requirement", ""
     )
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/noop.py",
         "def run(ctx, input):\n    return {'ok': True}\n",
         role="action",

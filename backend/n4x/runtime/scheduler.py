@@ -10,8 +10,10 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from n4x.graph.bindings import RevisionBindings
 from n4x.graph.store import GraphStore, node_ref
 from n4x.graph.uow import GraphUnitOfWork
+from n4x.kernel.models import ExecutionContext
 from n4x.kernel.errors import ValidationFailure
 from n4x.kernel.hash import sha256_json
 from n4x.kernel.models import JobAttempt, JobRecord, TriggerRevision, now_utc
@@ -41,6 +43,7 @@ class TriggerRuntime:
         self.store = graph_store
         self.uow = uow or GraphUnitOfWork(graph_store)
         self.graph = self.uow.records
+        self.bindings = RevisionBindings(self.uow)
         self._scheduler: BackgroundScheduler | None = None
         self.lease_owner = f"n4x-local:{os.getpid()}"
 
@@ -128,7 +131,10 @@ class TriggerRuntime:
                 raise ValidationFailure(
                     "application triggers are paused or unavailable"
                 )
-            revision = self.graph.revisions[trigger_revision.application_revision_id]
+            application = self._application_for_trigger(trigger_revision)
+            if application is None:
+                raise ValidationFailure("trigger application is unavailable")
+            revision = self.graph.revisions[application.active_revision_id]
             now = now_utc()
             job_input = {**trigger_revision.input_template, **(input_value or {})}
             key = idempotency_key or sha256_json(
@@ -155,6 +161,7 @@ class TriggerRuntime:
                     queued_at=now,
                     completed_at=now,
                     error="skipped because trigger is already running",
+                    application_revision_id=revision.id,
                 )
             job = self._record_job(
                 revision.application_id,
@@ -164,6 +171,7 @@ class TriggerRuntime:
                 status="scheduled",
                 scheduled_at=now,
                 queued_at=now,
+                application_revision_id=revision.id,
             )
         return self._execute_job(job, trigger_revision)
 
@@ -211,8 +219,8 @@ class TriggerRuntime:
     ) -> list[JobRecord]:
         jobs = []
         for trigger_revision in self.active_trigger_revisions():
-            revision = self.graph.revisions[trigger_revision.application_revision_id]
-            if revision.application_id != application_id:
+            application = self._application_for_trigger(trigger_revision)
+            if application is None or application.id != application_id:
                 continue
             if trigger_revision.trigger_type != "event":
                 continue
@@ -231,9 +239,13 @@ class TriggerRuntime:
                 or trigger_revision.misfire_policy == "skip"
             ):
                 continue
-            revision = self.graph.revisions[trigger_revision.application_revision_id]
+            application = self._application_for_trigger(trigger_revision)
+            if application is None:
+                continue
+            if application.active_revision_id is None:
+                continue
             job = self._record_job(
-                revision.application_id,
+                application.id,
                 trigger_revision,
                 trigger_revision.input_template,
                 sha256_json(
@@ -246,6 +258,7 @@ class TriggerRuntime:
                 scheduled_at=now,
                 completed_at=now,
                 error="scheduled trigger may have fired while runtime was stopped",
+                application_revision_id=application.active_revision_id,
             )
             missed.append(job)
         return missed
@@ -344,18 +357,37 @@ class TriggerRuntime:
             self.graph.job_attempts.save(running_attempt)
             self.graph.job_records[running.id] = running
             action_revision = self.graph.action_revisions[current.action_revision_id]
+            application = self.graph.applications[current.application_id]
+            pinned_revision_id = current.application_revision_id
+            if self.graph.revisions.get(pinned_revision_id) is None:
+                return self._fail_or_retry(
+                    running,
+                    trigger_revision,
+                    error=(
+                        "job application revision is gone: "
+                        f"{pinned_revision_id}"
+                    ),
+                    attempt_status="failed",
+                    attempt=running_attempt,
+                )
+            execution_context = ExecutionContext(
+                correlation_id=str(uuid.uuid4()),
+                application_revision_id=pinned_revision_id,
+                application_id=application.id,
+            )
 
         with self.uow:
             if not self._application_allows_triggers(trigger_revision):
                 return self._defer_paused_job(running, running_attempt)
         self.uow.require_inactive("execute scheduled action")
+        job_id = running.id
+        attempt_id = running_attempt.id
         invocation = self.actions.run(
             action_revision,
             running.input,
             invocation_kind="active",
-            heartbeat_callback=lambda: self._heartbeat_job(
-                running.id, running_attempt.id
-            ),
+            execution_context=execution_context,
+            heartbeat_callback=lambda: self._heartbeat_job(job_id, attempt_id),
         )
         with self.uow:
             self.store.create_edge(
@@ -497,12 +529,16 @@ class TriggerRuntime:
         completed_at=None,
         heartbeat_at=None,
         error: str | None = None,
+        application_revision_id: str,
     ) -> JobRecord:
         job = JobRecord(
             id=str(uuid.uuid4()),
             application_id=application_id,
+            application_revision_id=application_revision_id,
             trigger_revision_id=trigger_revision.id,
-            action_revision_id=trigger_revision.action_revision_id,
+            action_revision_id=self._action_revision_id(
+                application_revision_id, trigger_revision
+            ),
             status=status,  # type: ignore[arg-type]
             input=input_value,
             scheduled_at=scheduled_at,
@@ -541,19 +577,27 @@ class TriggerRuntime:
             for job in self.graph.job_records.values()
         )
 
+    def _application_for_trigger(self, trigger_revision: TriggerRevision):
+        trigger = self.graph.triggers.get(trigger_revision.trigger_id)
+        if trigger is None:
+            return None
+        return self.graph.applications.get(trigger.application_id)
+
+    def _action_revision_id(
+        self, application_revision_id: str, trigger_revision: TriggerRevision
+    ) -> str:
+        return self.bindings.action_revision(
+            application_revision_id, trigger_revision.action_id
+        ).id
+
     def _application_allows_triggers(
         self, trigger_revision: TriggerRevision
     ) -> bool:
-        revision = self.graph.revisions.get(
-            trigger_revision.application_revision_id
-        )
-        if revision is None:
-            return False
-        application = self.graph.applications.get(revision.application_id)
+        application = self._application_for_trigger(trigger_revision)
         return (
             application is not None
             and application.status == "active"
-            and application.active_revision_id == revision.id
+            and application.active_revision_id is not None
         )
 
     def _defer_paused_job(

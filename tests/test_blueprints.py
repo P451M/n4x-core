@@ -135,13 +135,11 @@ def test_blueprint_instantiates_typed_experience_content() -> None:
     experience_revision = system.graph.experience_revisions[
         experience_result["experience_revision_id"]
     ]
-    surface = system.graph.experience_surfaces[(
-        experience_revision.id, "full-stack-ui.main"
-    )]
+    surfaces = system.experiences.surfaces.list(experience_revision.id)
+    assert [item.surface_id for item in surfaces] == ["full-stack-ui.main"]
     assert experience_revision.application_access[0].application_id == (
         "full-stack-backend"
     )
-    assert surface.experience_revision_id == experience_revision.id
     assert experience_result["surface_ids"] == ["full-stack-ui.main"]
 
 

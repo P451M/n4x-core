@@ -11,7 +11,7 @@ def test_inspect_revision_reports_dirty_paths_and_unbuilt_surfaces() -> None:
     experience = system.create_experience("editor-ui", "Editor UI")
     revision = system.create_experience_revision(experience.id, ui_profile="none")
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "src/main.ts",
         "export {}",
         role="surface",
@@ -70,7 +70,7 @@ async def _assert_development_preview_url_uses_first_browser_mount() -> None:
         application_access=[{"application_id": application.id}],
     )
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "src/main.ts",
         "export {}",
         role="surface",
@@ -118,7 +118,7 @@ async def _assert_development_deployment_mcp_returns_instance_preview_urls() -> 
         application_access=[{"application_id": application.id}],
     )
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "src/main.ts",
         "export {}",
         role="surface",
@@ -174,7 +174,7 @@ async def _assert_development_deployment_mcp_returns_instance_preview_urls() -> 
     )
 
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "src/extra.ts",
         "export {}",
         role="surface",

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 from starlette.testclient import TestClient
 
 from n4x.host.identity import HOST_ADAPTER

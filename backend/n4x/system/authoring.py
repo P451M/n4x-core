@@ -100,7 +100,7 @@ EXPERIENCE_AUTHORING_WORKFLOW = (
     {
         "id": "inspect-existing-source",
         "instruction": (
-            "Inspect the Experience revision's existing SourceFiles and reuse its "
+            "Inspect the Experience revision's existing source files and reuse its "
             "component foundation, shell, and conventions before adding new source."
         ),
     },
@@ -390,7 +390,7 @@ class PlatformAuthoringService(ServiceBase):
             "ownership": "experience_owned",
             "theme_import": "import './n4x-theme.css';",
             "guidance": (
-                "Create Experience-owned shadcn/ui components in graph SourceFiles. "
+                "Create Experience-owned shadcn/ui components in Experience source. "
                 "Declare Radix, Lucide, chart, calendar, table, editor, and other "
                 "component dependencies on the Experience revision."
             ),

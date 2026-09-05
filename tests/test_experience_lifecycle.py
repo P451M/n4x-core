@@ -82,7 +82,7 @@ def test_disabled_experience_draft_can_be_revised_and_activated() -> None:
             )
         )
     child = system.create_experience_revision(experience.id)
-    assert child.parent_revision_id == imported.id
+    assert child.id == imported.id
     assert child.application_access[0].application_id == app.id
     activated = system.activate_experience_revision(child.id)
     assert activated.status == "active"

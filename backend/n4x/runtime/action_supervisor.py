@@ -213,11 +213,19 @@ class ActionSupervisor:
             for invocation_id in invocation_ids
         ]
 
-    def import_check(self, action_revision: ActionRevision) -> None:
-        self.runtime.import_check(action_revision)
+    def import_check(
+        self, action_revision: ActionRevision, *, application_revision_id: str
+    ) -> None:
+        self.runtime.import_check(
+            action_revision, application_revision_id=application_revision_id
+        )
 
-    def materialize(self, action_revision: ActionRevision):
-        return self.runtime.materialize(action_revision)
+    def materialize(
+        self, action_revision: ActionRevision, *, application_revision_id: str
+    ):
+        return self.runtime.materialize(
+            action_revision, application_revision_id=application_revision_id
+        )
 
     def shutdown(self, *, wait: bool = True) -> None:
         with self._lock:

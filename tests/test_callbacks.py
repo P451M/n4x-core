@@ -69,7 +69,7 @@ def _callback_app() -> tuple[SystemRuntime, str]:
     app = system.create_application("callbacks", "Callbacks")
     revision = system.create_application_revision(app.id)
     system.source.write_source_file(
-        revision.source_tree_id,
+        revision.id,
         "actions/callback.py",
         (
             "def handle(ctx, input):\n"

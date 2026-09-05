@@ -83,7 +83,8 @@ class PythonEnvironmentManager:
             command.append("--clear")
         invocation = BuildInvocation(
             id=str(uuid.uuid4()),
-            application_revision_id=application_revision_id,
+            owner_kind="ApplicationRevision",
+            owner_id=application_revision_id,
             kind="python_env",
             status="started",
             input_hash=input_hash,
@@ -202,7 +203,8 @@ class PythonEnvironmentManager:
             artifact_id = str(uuid.uuid4())
             artifact = BuildArtifact(
                 id=artifact_id,
-                application_revision_id=application_revision_id,
+                owner_kind="ApplicationRevision",
+                owner_id=application_revision_id,
                 build_invocation_id=completed.id,
                 artifact_type="python_environment",
                 path=str(env_path),
@@ -268,7 +270,8 @@ class PythonEnvironmentManager:
     ) -> BuildInvocation:
         invocation = BuildInvocation(
             id=str(uuid.uuid4()),
-            application_revision_id=application_revision_id,
+            owner_kind="ApplicationRevision",
+            owner_id=application_revision_id,
             kind="python_env",
             status=status,  # type: ignore[arg-type]
             input_hash=input_hash,
@@ -303,11 +306,14 @@ class PythonEnvironmentManager:
     def _python_dependencies(
         self, application_revision_id: str
     ) -> list[RuntimeDependency]:
+        from n4x.graph.bindings import RevisionBindings
+
         dependencies = [
             dependency
-            for dependency in self.graph.runtime_dependencies.values()
-            if dependency.application_revision_id == application_revision_id
-            and dependency.ecosystem == "python"
+            for dependency in RevisionBindings(self.uow).dependencies(
+                application_revision_id
+            )
+            if dependency.ecosystem == "python"
         ]
         return sorted(
             dependencies,

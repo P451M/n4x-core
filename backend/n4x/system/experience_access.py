@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from n4x.graph.bindings import RevisionBindings
 from n4x.graph.uow import GraphUnitOfWork
 from n4x.kernel.errors import ExperienceAccessError, FileDeliveryError
 from n4x.kernel.models import (
@@ -70,6 +71,7 @@ class ExperienceAccessService:
     ) -> None:
         self.uow = uow
         self.records = uow.records
+        self.bindings = RevisionBindings(uow)
         self.objects = objects
         self.relations = relations
         self.invocations = invocations
@@ -359,14 +361,19 @@ class ExperienceAccessService:
                 403,
             )
         application = self.records.applications[application_id]
-        active = (
-            None
-            if stable.active_revision_id is None
-            else revision_records.get(stable.active_revision_id)
-        )
+        bound = {
+            "action": self.bindings.action_revisions,
+            "object_type": self.bindings.object_type_revisions,
+            "relation_type": self.bindings.relation_type_revisions,
+        }.get(kind)
+        active_id = application.active_revision_id
         if (
-            active is None
-            or active.application_revision_id != application.active_revision_id
+            bound is None
+            or active_id is None
+            or stable.active_revision_id is None
+            or revision_records.get(stable.active_revision_id) is None
+            or stable.active_revision_id
+            not in {item.id for item in bound(active_id)}
         ):
             self._fail("inactive_definition", f"{kind} is not active", 409)
         if allowlist is not None and identifier not in allowlist:
