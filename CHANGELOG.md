@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+
+Host waits 120s for a System worker to become healthy and includes the
+worker log on a failed enable. CI smokes a previous-image cutover: keep
+Neo4j, recreate n4x, then import and enable.
+
 ## 0.2.1
 
 Clone development deployments bind the Experience's declared secret
