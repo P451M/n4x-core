@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.4
+
+Host control stays on loopback. Worker tools no longer call the public origin.
+
 ## 0.2.3
 
 `apply_source_patch` documents and rejects anything but a unified diff.
