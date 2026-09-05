@@ -245,6 +245,7 @@ def test_search_source_tree_and_ranged_read() -> None:
         "@@ -1,1 +1,1 @@\n-missing\n+replacement\n",
         "--- a/value.txt\n@@ -1 +1 @@\n-original\n+replacement\n",
         "not a unified diff\n",
+        "*** Begin Patch ***\n*** Update File: value.txt\n@@\n-original\n+replacement\n",
     ],
 )
 def test_apply_source_patch_rejects_conflicts_without_writing(patch: str) -> None:
@@ -270,6 +271,27 @@ def test_apply_source_patch_rejects_conflicts_without_writing(patch: str) -> Non
     current = system.source.read_source_file(tree_id(system, revision), "value.txt")
     assert current.content == original.content
     assert current.content_hash == original.content_hash
+
+
+def test_apply_source_patch_rejects_cursor_apply_patch_dialect() -> None:
+    system = create_test_runtime()
+    app = system.create_application("cursor-patch", "Cursor Patch")
+    revision = system.create_application_revision(app.id)
+    original = system.source.write_source_file(
+        revision.id,
+        "value.txt",
+        "original\n",
+        role="helper",
+        language="text",
+    )
+
+    with pytest.raises(SourceConflictError, match="unified diff"):
+        system.source.apply_source_patch(
+            revision.id,
+            "value.txt",
+            "*** Begin Patch ***\n*** Update File: value.txt\n@@\n-original\n+replacement\n",
+            expected_hash=original.content_hash,
+        )
 
 
 def test_batch_update_is_atomic() -> None:

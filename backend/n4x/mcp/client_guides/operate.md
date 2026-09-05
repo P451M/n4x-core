@@ -22,7 +22,8 @@ Draft review is the clone `preview_url`. If the Cursor browser is on the
 production login page, ask the operator to finish sign-in in that tab, then
 continue — that is live proof, not draft preview. A new draft must be built
 before open (`surface_artifact_missing` is an unbuilt surface, not an app
-bug). An active-only Experience cannot deploy.
+bug). An active-only Experience cannot deploy. After a later activate, a
+pin that is no longer draft or active needs a new deployment.
 
 Inspect with `inspect_development_deployment`, `list_development_objects`,
 and `list_development_relations`. Authoring list tools are bounded (summary

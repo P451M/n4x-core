@@ -244,6 +244,7 @@ class DevelopmentDeploymentService:
                 f"development deployment is expired: {deployment_id}"
             )
         self._require_unchanged(deployment)
+        self._require_current_pins(deployment)
         return deployment
 
     def experience_revision(
@@ -517,3 +518,18 @@ class DevelopmentDeploymentService:
             raise ValidationFailure(
                 "development deployment candidate changed; redeploy required"
             )
+
+    def _require_current_pins(self, deployment: DevelopmentDeployment) -> None:
+        experience = self.records.experience_revisions[
+            deployment.experience_revision_id
+        ]
+        if experience.status not in {"draft", "active"}:
+            raise ValidationFailure(
+                "development deployment candidate superseded; redeploy required"
+            )
+        for revision_id in deployment.application_revision_ids.values():
+            revision = self.records.revisions[revision_id]
+            if revision.status not in {"draft", "active"}:
+                raise ValidationFailure(
+                    "development deployment candidate superseded; redeploy required"
+                )

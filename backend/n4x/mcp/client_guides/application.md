@@ -71,7 +71,9 @@ on large files). `search_source_tree` accepts `context` (default 2).
 A new file or a rewrite (more than a few hunks): compose the body — a local
 `/tmp` file is only scratch — then `write_source_file` with `revision_id` and
 `expected_hash` from the last read. A few surgical hunks: `apply_source_patch`
-with `revision_id` and unique context; line numbers are a hint, not an address.
+with a unified diff (`--- a/path`, `+++ b/path`, `@@ -1,2 +1,3 @@`), not
+Cursor ApplyPatch (`*** Begin Patch ***`). Line numbers are a hint; unique
+`-` / ` ` context locates the hunk.
 
 ## After backend
 

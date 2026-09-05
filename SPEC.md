@@ -1002,7 +1002,9 @@ production. N4X does not provision a second stack. The deployment pins the
 candidate content hashes of one draft Experience revision, every declared
 draft or active Application revision, and one DataSpace binding per
 Application without changing any production `ACTIVE_REVISION`. Any later
-source mutation invalidates that deployment and requires redeployment.
+source mutation invalidates that deployment and requires redeployment. A
+pin whose revision is no longer draft or active (superseded by a later
+activate) also requires redeployment.
 
 An `ExecutionContext` accompanies every deployment-qualified read, Action,
 Cypher request, file token, Invocation, and diagnostic:

@@ -115,9 +115,10 @@ await create and then navigate.
 - Graph source is the authority. Do not check out a local workspace.
   A new file or a rewrite: compose the body — `/tmp` is only scratch — then
   `write_source_file` with `revision_id` and `expected_hash` from the last
-  read. A few surgical hunks: `apply_source_patch` with `revision_id` and
-  unique context; line numbers are a hint. Search the tree or read a line
-  range instead of reading every file.
+  read. A few surgical hunks: `apply_source_patch` with a unified diff
+  (`--- a/path`, `+++ b/path`, `@@ -1,2 +1,3 @@`), not Cursor ApplyPatch
+  (`*** Begin Patch ***`). Line numbers are a hint. Search the tree or
+  read a line range instead of reading every file.
 
 ## MCP App Surfaces
 

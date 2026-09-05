@@ -110,7 +110,10 @@ def _apply_unified_diff(content: str, patch: str) -> str:
         match = _UNIFIED_HUNK.match(header)
         if match is None:
             raise SourceConflictError(
-                f"invalid unified diff hunk header: {header.rstrip()}"
+                f"invalid unified diff hunk header: {header.rstrip()}. "
+                "apply_source_patch expects a unified diff "
+                "(--- a/path, +++ b/path, @@ -1,2 +1,3 @@), "
+                "not Cursor ApplyPatch (*** Begin Patch ***)."
             )
         index += 1
         hunk_count += 1

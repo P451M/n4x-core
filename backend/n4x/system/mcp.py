@@ -1363,7 +1363,7 @@ def create_system_mcp(
         patch: str,
         expected_hash: str | None = None,
     ) -> dict[str, Any]:
-        """Apply a few surgical hunks by unique context. For a rewrite, use write_source_file. Never writes a partial file."""
+        """Apply a unified diff. Not Cursor ApplyPatch (*** Begin Patch ***). Example: --- a/path\\n+++ b/path\\n@@ -1,2 +1,3 @@\\n context\\n-old\\n+new. Line numbers are a hint; unique - / space context locates the hunk. For a rewrite, use write_source_file. Never writes a partial file."""
         from n4x.kernel.errors import SourceConflictError
 
         try:

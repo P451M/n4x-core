@@ -236,6 +236,51 @@ def test_development_deployment_binds_candidates_and_detects_source_drift() -> N
         )
 
 
+def test_development_deployment_rejects_superseded_application_pin() -> None:
+    system = create_test_runtime()
+    app = system.create_application("superseded-pin", "Superseded Pin")
+    first = system.create_application_revision(app.id)
+    system.create_object_type(first.id, "superseded.Item", name="Item")
+    system.source.write_source_file(
+        first.id,
+        "actions/count.py",
+        action_source(
+            "def run(ctx, input):\n"
+            "    return {'ok': True}\n"
+        ),
+        role="action",
+        language="python",
+    )
+    action = system.create_action(
+        first.id,
+        "superseded.count",
+        kind="normal",
+        entrypoint="actions/count.py:run",
+        source_paths=["actions/count.py"],
+    )
+    system.activate_application_revision(first.id)
+    system.create_experience("superseded-ui", "Superseded UI")
+    experience_revision = system.create_experience_revision(
+        "superseded-ui",
+        application_access=[{"application_id": app.id}],
+    )
+    deployment = system.create_development_deployment(
+        experience_revision.id,
+        {app.id: first.id},
+    )
+    first_run = system.run_development_action(
+        deployment.id, app.id, action.action_id, {}
+    )
+    assert first_run.status == "succeeded", first_run.error
+
+    second = system.create_application_revision(app.id)
+    system.activate_application_revision(second.id)
+    with pytest.raises(ValidationFailure, match="redeploy required"):
+        system.run_development_action(
+            deployment.id, app.id, action.action_id, {}
+        )
+
+
 def test_development_deployment_can_bounded_clone_production_subgraph() -> None:
     system = create_test_runtime()
     app = system.create_application("clone", "Clone")
