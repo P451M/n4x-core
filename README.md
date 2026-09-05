@@ -19,15 +19,9 @@ Point Cursor, Claude, Codex, or any MCP client at your N4X cloud. Describe the a
 
 ## Quick start
 
-
-
-### Managed
-
-Get your running N4X cloud by creating an N4X account at [https://n4x.emergingthoughts.org/](https://n4x.emergingthoughts.org/).
-
 ### Local
 
-You need [Docker](https://docs.docker.com/get-docker/).
+You need [Docker](https://docs.docker.com/get-docker/). The first start builds the image and can take several minutes.
 
 ```bash
 git clone https://github.com/P451M/n4x-core.git && cd n4x-core && sh scripts/local.sh
@@ -37,9 +31,12 @@ That starts N4X and Neo4j on your computer only. Docs: [https://n4x.emergingthou
 
 - MCP: [http://127.0.0.1:7744/mcp](http://127.0.0.1:7744/mcp)
 - Health: [http://127.0.0.1:7744/health](http://127.0.0.1:7744/health)
-- UI, after you create an experience: [http://127.0.0.1:7744/experience/](http://127.0.0.1:7744/experience/)
 
 Stop with `sh scripts/local.sh down`. For a public machine, see [Self-host](#self-host).
+
+### Managed
+
+Creating an account at [https://n4x.emergingthoughts.org/](https://n4x.emergingthoughts.org/) puts you on the waitlist. A machine exists only after we accept the request. Then point a client at `https://<your-origin>/mcp`.
 
 ### Connect your AI client
 
@@ -70,7 +67,7 @@ codex mcp add n4x --url http://127.0.0.1:7744/mcp
 
 Cloud ChatGPT cannot reach `127.0.0.1`. Use a client from this list, or a [managed](#managed) origin and point the client at `https://<your-origin>/mcp`.
 
-Then ask for the app. It is authored onto the graph and live. Open it in the browser, as a PWA, or from chat.
+Ask the client to call `inspect_client_guide`. Then describe a small notes app, or ask it to import and activate `examples/notes.n4xp` from this clone. That file is an ordinary `.n4xp` package: the client stages, inspects, and imports it. When an Experience is live, open `http://127.0.0.1:7744/experience/{id}` — the client returns the id.
 
 ## Why N4X
 

@@ -53,8 +53,9 @@ if [ "$#" -eq 0 ]; then
   fi
   $compose up -d --build --wait
   echo "N4X is up at http://127.0.0.1:7744"
-  echo "MCP:  http://127.0.0.1:7744/mcp"
-  echo "Stop: sh scripts/local.sh down"
+  echo "MCP:    http://127.0.0.1:7744/mcp"
+  echo "Health: http://127.0.0.1:7744/health"
+  echo "Stop:   sh scripts/local.sh down"
   exit 0
 fi
 exec $compose "$@"

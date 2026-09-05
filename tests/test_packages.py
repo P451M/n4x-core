@@ -161,6 +161,30 @@ def test_package_stage_from_path_and_list(tmp_path: Path) -> None:
         )
 
 
+def test_examples_notes_package_inspects_compatible() -> None:
+    archive = Path(__file__).resolve().parents[1] / "examples" / "notes.n4xp"
+    paths = RuntimePaths.temporary()
+    system = SystemRuntime(InMemoryGraphStore(), runtime_paths=paths)
+    system.stage_package_from_path("notes.n4xp", archive)
+    inspected = system.inspect_package("notes.n4xp")
+    assert inspected["compatible"] is True
+    assert inspected["disagreements"] == []
+    assert inspected["experience_id"] == "sample-notes"
+    assert inspected["application_ids"] == ["sample.notes"]
+    assert inspected["object_count"] == 2
+    assert inspected["collisions"] == []
+    installed = system.import_package("notes.n4xp")
+    assert installed["attempt"]["status"] == "succeeded"
+    assert installed["compatible"] is True
+    experience = system.experiences.inspect("sample-notes")
+    assert experience["experience"]["active_revision_id"] is not None
+    notes = system.list_application_objects("sample.notes")
+    assert {item.id for item in notes} == {
+        "sample.notes.welcome",
+        "sample.notes.graph",
+    }
+
+
 def test_package_import_collapses_repeated_definition_history_to_active_revision() -> None:
     paths = RuntimePaths.temporary()
     source = SystemRuntime(InMemoryGraphStore(), runtime_paths=paths)
