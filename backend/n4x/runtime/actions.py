@@ -459,10 +459,10 @@ class ActionRuntime:
             execution_context,
         )
         revision = self.graph.revisions[execution_context.application_revision_id]
-        secrets_path = (
-            None
-            if check_only or execution_context.mode == "development"
-            else self._write_secret_payload(action_revision)
+        secrets_path = self._secrets_path_for(
+            action_revision,
+            execution_context,
+            check_only=check_only,
         )
         data_scope_key = self.paths.application_data_scope_key(
             revision.application_id,
@@ -652,13 +652,43 @@ class ActionRuntime:
             -ACTION_LOG_LIMIT_CHARS:
         ]
 
-    def _write_secret_payload(self, action_revision: ActionRevision) -> Path | None:
-        if not action_revision.secret_refs:
+    def _secrets_path_for(
+        self,
+        action_revision: ActionRevision,
+        execution_context: ExecutionContext,
+        *,
+        check_only: bool,
+    ) -> Path | None:
+        if check_only:
+            return None
+        if execution_context.mode == "development":
+            deployment = self.graph.development_deployments.get(
+                execution_context.deployment_id or ""
+            )
+            if deployment is None:
+                return None
+            allowed = set(deployment.secret_reference_ids)
+            refs = [
+                reference_id
+                for reference_id in action_revision.secret_refs
+                if reference_id in allowed
+            ]
+            return self._write_secret_payload(action_revision, secret_refs=refs)
+        return self._write_secret_payload(action_revision)
+
+    def _write_secret_payload(
+        self,
+        action_revision: ActionRevision,
+        *,
+        secret_refs: list[str] | None = None,
+    ) -> Path | None:
+        refs = action_revision.secret_refs if secret_refs is None else secret_refs
+        if not refs:
             return None
         values = {
             secret.uri: secret.value
             for secret in self.secrets.allowed_secret_values(
-                action_revision.secret_refs,
+                refs,
                 require_values=False,
             )
         }

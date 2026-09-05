@@ -1029,9 +1029,11 @@ deployment-qualified and resolve only the pinned revisions and bound
 DataSpaces. Production routes and active-resource catalogs retain their
 existing meaning.
 
-Development triggers and callbacks are disabled. Secret access is denied by
-default and may be enabled only through an explicit deployment binding to
-existing references; secret values are never cloned. Expiry revokes ingress,
+Development triggers and callbacks are disabled. Secret access is denied for
+`initialization=empty`. `initialization=clone` binds the ExperienceRevision's
+declared `application_access` secret references; the instance vault is injected
+at action run. Secret values are never cloned into the DataSpace or a second
+store. Expiry revokes ingress,
 cancels supervised work, invalidates file tokens, and removes isolated graph and
 volume state after use. Managed ingress may serve `/development/` and
 `/api/development/` as deployment-capability URLs; production `/experience/`

@@ -123,6 +123,7 @@ class DevelopmentDeployment(BaseModel):
     application_revision_ids: dict[str, str] = Field(default_factory=dict)
     data_space_ids: dict[str, str] = Field(default_factory=dict)
     candidate_hashes: dict[str, str] = Field(default_factory=dict)
+    secret_reference_ids: list[str] = Field(default_factory=list)
     status: DevelopmentDeploymentStatus = "active"
     created_at: datetime = Field(default_factory=now_utc)
     expires_at: datetime

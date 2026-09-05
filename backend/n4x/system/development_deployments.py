@@ -160,12 +160,18 @@ class DevelopmentDeploymentService:
                     specs.get(application_id),
                 )
 
+        secret_reference_ids = (
+            self._clone_secret_reference_ids(experience_revision)
+            if initialization == "clone"
+            else []
+        )
         deployment = DevelopmentDeployment(
             id=deployment_id,
             experience_revision_id=experience_revision_id,
             application_revision_ids=dict(application_revision_ids),
             data_space_ids=data_space_ids,
             candidate_hashes=candidate_hashes,
+            secret_reference_ids=secret_reference_ids,
             expires_at=expires_at,
         )
         self.records.development_deployments.save(deployment)
@@ -420,6 +426,37 @@ class DevelopmentDeploymentService:
                     "migration revisions run only through activation"
                 )
             return revision
+
+    def _clone_secret_reference_ids(
+        self, experience_revision: ExperienceRevision
+    ) -> list[str]:
+        bound: list[str] = []
+        seen: set[str] = set()
+        for declaration in experience_revision.application_access:
+            for reference_id in declaration.secret_reference_ids or []:
+                if not reference_id or reference_id in seen:
+                    continue
+                reference = self.records.secret_references.get(reference_id)
+                if reference is None:
+                    raise ValidationFailure(
+                        f"unknown secret reference: {reference_id}"
+                    )
+                if reference.application_id != declaration.application_id:
+                    raise ValidationFailure(
+                        "secret reference owner mismatch: " + reference_id
+                    )
+                seen.add(reference_id)
+                bound.append(reference_id)
+        return bound
+
+    def bound_secret_reference_ids(
+        self, deployment_id: str, application_id: str
+    ) -> list[str]:
+        deployment = self.require_available(deployment_id)
+        access = self._access(deployment_id, application_id)
+        declared = access.secret_reference_ids or []
+        allowed = set(deployment.secret_reference_ids)
+        return [reference_id for reference_id in declared if reference_id in allowed]
 
     def _access(
         self, deployment_id: str, application_id: str

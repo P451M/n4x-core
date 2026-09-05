@@ -13,6 +13,17 @@ draft review after Surfaces are built. On a public origin that path is a
 deployment capability; do not complete OIDC to open it. Production
 `/experience/{id}` still requires instance sign-in. Do not activate to preview.
 
+`initialization: "clone"` copies production graph objects and binds the
+Experience's declared secret references (same vault; values are not copied).
+`empty` is layout-only. Clone preview can invoke provider actions for the
+TTL; PUT/DELETE of secret values stay on production `/api/experiences/…`.
+
+Draft review is the clone `preview_url`. If the Cursor browser is on the
+production login page, ask the operator to finish sign-in in that tab, then
+continue — that is live proof, not draft preview. A new draft must be built
+before open (`surface_artifact_missing` is an unbuilt surface, not an app
+bug). An active-only Experience cannot deploy.
+
 Inspect with `inspect_development_deployment`, `list_development_objects`,
 and `list_development_relations`. Authoring list tools are bounded (summary
 by default, `limit` 50, hard cap 200). Experience-bridge `list_objects` is

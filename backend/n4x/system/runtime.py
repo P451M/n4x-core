@@ -331,6 +331,53 @@ class SystemRuntime:
     def list_experience_secrets(self, experience_id: str, application_id: str):
         return self.experience_access.list_secrets(experience_id, application_id)
 
+    def list_development_secrets(self, deployment_id: str, application_id: str):
+        reference_ids = (
+            self.development_deployments.bound_secret_reference_ids(
+                deployment_id, application_id
+            )
+        )
+        return self._secret_status_rows(application_id, reference_ids)
+
+    def development_secret_status(
+        self,
+        deployment_id: str,
+        application_id: str,
+        secret_reference_id: str,
+    ):
+        bound = self.development_deployments.bound_secret_reference_ids(
+            deployment_id, application_id
+        )
+        if secret_reference_id not in bound:
+            raise ValidationFailure(
+                f"secret reference is not bound to deployment: {secret_reference_id}"
+            )
+        rows = self._secret_status_rows(application_id, [secret_reference_id])
+        if not rows:
+            raise KeyError(secret_reference_id)
+        return rows[0]
+
+    def _secret_status_rows(
+        self, application_id: str, reference_ids: list[str]
+    ) -> list[dict[str, object]]:
+        result: list[dict[str, object]] = []
+        for reference_id in reference_ids:
+            reference = self.uow.records.secret_references.get(reference_id)
+            if reference is None or reference.application_id != application_id:
+                raise ValidationFailure(
+                    f"declared secret reference is unavailable: {reference_id}"
+                )
+            status = self.secrets.secret_status(application_id, reference_id)
+            result.append(
+                {
+                    **status,
+                    "uri": reference.uri,
+                    "name": reference.name,
+                    "description": reference.description,
+                }
+            )
+        return sorted(result, key=lambda item: str(item["uri"]))
+
     def set_experience_secret_value(
         self,
         experience_id: str,

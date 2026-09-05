@@ -52,7 +52,13 @@ EXPERIENCE_BRIDGE_SCHEMA = {
             "/api/development/{deployment_id}/apps/{application_id}"
             "/actions/{action_id}/submit"
         ),
-        "secrets": "denied",
+        "secrets": (
+            "/api/development/{deployment_id}/apps/{application_id}/secrets"
+        ),
+        "secret": (
+            "/api/development/{deployment_id}/apps/{application_id}"
+            "/secrets/{secret_reference_id}"
+        ),
     },
     "mcp_app": {
         "transport": "window.parent.postMessage",

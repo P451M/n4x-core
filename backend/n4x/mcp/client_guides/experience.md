@@ -62,6 +62,9 @@ separate operation.
 
 ## Live draft preview
 
+Draft review is a clone `preview_url`. Production smoke is OIDC on
+`/experience/{id}`. Do not activate to preview.
+
 `create_development_deployment` and `inspect_development_deployment` return an
 absolute instance `preview_url`:
 `{origin}/development/{deployment_id}/experience/{experience_id}`.
@@ -71,9 +74,24 @@ is the process bind and is never the only URL on a managed instance.
 On a public origin `preview_auth` is `deployment`: open `preview_url` without
 OIDC. The path is a short-lived deployment capability; production
 `/experience/{id}` stays instance OIDC. Local loopback has `preview_auth`
-`none` and no sign-in. If the URL is expired or the client cannot open it,
-report that visual review was impossible. Do not serve drafts on production
+`none` and no sign-in. If the URL is expired, the surface is unbuilt, the deployment is `empty`
+without secrets, or the client cannot open it, report that visual review was
+incomplete — not as an app bug. Do not serve drafts on production
 `/experience/{id}`.
+
+### How to open preview
+
+1. Need a **draft** Experience revision. An active-only Experience cannot
+   deploy.
+2. `build_experience_surface` for `browser` **before** opening. New drafts do
+   not inherit parent artifacts (`surface_artifact_missing`).
+3. `create_development_deployment` with `initialization: "clone"` for graph
+   data plus the Experience's declared secret references (same vault; values
+   are not copied). `empty` is layout-only and cannot call providers.
+4. Open the returned `preview_url`. Do not complete OIDC on that path. Do not
+   use `/experience/{id}` for a draft.
+5. If the tab is the production login page: ask the operator to sign in in the
+   Cursor browser, then continue. That is live proof, not draft preview.
 
 ## Editing discipline
 

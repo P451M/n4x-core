@@ -48,3 +48,6 @@ Experience authorization, or HTTP/MCP hosting.
 
 - `mcp_app` — chat-native Surfaces versus browser Surfaces
 - `operate` — development deployments, jobs, callbacks, secrets, packages
+
+Draft review is a clone `preview_url` (`/development/{id}/experience/{id}`).
+Production smoke is OIDC on `/experience/{id}`.

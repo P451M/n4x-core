@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+from n4x.kernel.errors import ValidationFailure
 from n4x.system.mcp import create_system_mcp
 from n4x.testing import create_test_runtime
 
@@ -216,3 +218,167 @@ async def _assert_loopback_preview_auth_is_none() -> None:
     )
     assert created.structured_content["origin_kind"] == "host_bind"
     assert created.structured_content["preview_auth"] == "none"
+    assert created.structured_content["secret_reference_ids"] == []
+
+
+def _secret_reader_app(system, *, app_id: str = "secret-app"):
+    application = system.create_application(app_id, "Secret App")
+    revision = system.create_application_revision(application.id)
+    reference = system.secrets.create_reference(
+        application.id,
+        f"secret://{app_id}/test-password",
+        name="Test Password",
+    )
+    system.secrets.set_secret(reference.uri, "very-secret-value")
+    system.source.write_source_file(
+        revision.id,
+        "actions/read_secret.py",
+        (
+            "def run(ctx, input):\n"
+            f"    value = ctx.secrets.get('secret://{app_id}/test-password')\n"
+            "    return {'length': len(value), 'value': value}\n"
+        ),
+        role="action",
+        language="python",
+    )
+    action = system.create_action(
+        revision.id,
+        f"{app_id}.read",
+        kind="normal",
+        entrypoint="actions/read_secret.py:run",
+        source_paths=["actions/read_secret.py"],
+        secret_ref_ids=[reference.id],
+    )
+    return application, revision, reference, action
+
+
+def test_empty_development_deployment_does_not_bind_secrets() -> None:
+    from n4x.secrets.backends import InMemorySecretBackend
+
+    system = create_test_runtime(secret_backend=InMemorySecretBackend())
+    application, revision, reference, action = _secret_reader_app(system)
+    experience = system.create_experience("secret-ui", "Secret UI")
+    experience_revision = system.create_experience_revision(
+        experience.id,
+        ui_profile="none",
+        application_access=[
+            {
+                "application_id": application.id,
+                "action_ids": [action.action_id],
+                "secret_reference_ids": [reference.id],
+            }
+        ],
+    )
+    deployment = system.create_development_deployment(
+        experience_revision.id,
+        {application.id: revision.id},
+        initialization="empty",
+    )
+    assert deployment.secret_reference_ids == []
+    invocation = system.run_development_action(
+        deployment.id, application.id, action.action_id, {}
+    )
+    assert invocation.status == "failed"
+    assert "KeyError" in (invocation.error or "")
+    assert "very-secret-value" not in (invocation.error or "")
+
+
+def test_clone_development_deployment_binds_declared_secrets() -> None:
+    from n4x.secrets.backends import InMemorySecretBackend
+
+    system = create_test_runtime(secret_backend=InMemorySecretBackend())
+    application, revision, reference, action = _secret_reader_app(system)
+    notes = system.create_application("notes", "Notes")
+    notes_revision = system.create_application_revision(notes.id)
+    experience = system.create_experience("office-ui", "Office UI")
+    experience_revision = system.create_experience_revision(
+        experience.id,
+        ui_profile="none",
+        application_access=[
+            {
+                "application_id": application.id,
+                "action_ids": [action.action_id],
+                "secret_reference_ids": [reference.id],
+            },
+            {"application_id": notes.id},
+        ],
+    )
+    deployment = system.create_development_deployment(
+        experience_revision.id,
+        {application.id: revision.id, notes.id: notes_revision.id},
+        initialization="clone",
+    )
+    assert deployment.secret_reference_ids == [reference.id]
+    invocation = system.run_development_action(
+        deployment.id, application.id, action.action_id, {}
+    )
+    assert invocation.status == "succeeded"
+    assert invocation.output == {"length": 17, "value": "[REDACTED]"}
+    dumped = deployment.model_dump_json()
+    assert "very-secret-value" not in dumped
+    assert system.inspect_development_deployment(deployment.id).secret_reference_ids == [
+        reference.id
+    ]
+
+
+def test_clone_does_not_bind_empty_secret_allowlists() -> None:
+    system = create_test_runtime()
+    application = system.create_application("notes-only", "Notes Only")
+    revision = system.create_application_revision(application.id)
+    omitted = system.create_experience("notes-ui", "Notes UI")
+    omitted_revision = system.create_experience_revision(
+        omitted.id,
+        ui_profile="none",
+        application_access=[{"application_id": application.id}],
+    )
+    denied = system.create_experience("notes-denied", "Notes Denied")
+    denied_revision = system.create_experience_revision(
+        denied.id,
+        ui_profile="none",
+        application_access=[
+            {"application_id": application.id, "secret_reference_ids": []}
+        ],
+    )
+    omitted_deployment = system.create_development_deployment(
+        omitted_revision.id,
+        {application.id: revision.id},
+        initialization="clone",
+    )
+    denied_deployment = system.create_development_deployment(
+        denied_revision.id,
+        {application.id: revision.id},
+        initialization="clone",
+    )
+    assert omitted_deployment.secret_reference_ids == []
+    assert denied_deployment.secret_reference_ids == []
+
+
+def test_expired_clone_deployment_cannot_read_secrets() -> None:
+    from n4x.secrets.backends import InMemorySecretBackend
+
+    system = create_test_runtime(secret_backend=InMemorySecretBackend())
+    application, revision, reference, action = _secret_reader_app(
+        system, app_id="expired-secret-app"
+    )
+    experience = system.create_experience("expired-ui", "Expired UI")
+    experience_revision = system.create_experience_revision(
+        experience.id,
+        ui_profile="none",
+        application_access=[
+            {
+                "application_id": application.id,
+                "action_ids": [action.action_id],
+                "secret_reference_ids": [reference.id],
+            }
+        ],
+    )
+    deployment = system.create_development_deployment(
+        experience_revision.id,
+        {application.id: revision.id},
+        initialization="clone",
+    )
+    system.expire_development_deployment(deployment.id)
+    with pytest.raises(ValidationFailure, match="expired"):
+        system.run_development_action(
+            deployment.id, application.id, action.action_id, {}
+        )

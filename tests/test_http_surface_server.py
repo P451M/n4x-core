@@ -49,6 +49,12 @@ def test_http_runtime_exposes_surface_palette_and_theme() -> None:
     assert contract.json()["browser"]["secret"].endswith(
         "/secrets/{secret_reference_id}"
     )
+    assert contract.json()["development_browser"]["secrets"] == (
+        "/api/development/{deployment_id}/apps/{application_id}/secrets"
+    )
+    assert contract.json()["development_browser"]["secret"].endswith(
+        "/secrets/{secret_reference_id}"
+    )
     assert contract.json()["browser"]["file"].endswith("/files/{token}")
     assert (
         contract.json()["file_delivery_contract_version"]
@@ -556,6 +562,94 @@ def test_development_runtime_starts_and_stops_inspector(
     assert env["SERVER_PORT"] == "6277"
     assert "N4X_NEO4J_PASSWORD" not in env
     assert started["stopped"] is True
+
+
+def test_development_secrets_are_get_only_and_follow_clone_binding() -> None:
+    backend = InMemorySecretBackend()
+    system = create_test_runtime(secret_backend=backend)
+    app = system.create_application("preview-secrets", "Preview Secrets")
+    revision = system.create_application_revision(app.id)
+    reference = system.secrets.create_reference(
+        app.id, "secret://preview-secrets/password", name="Password"
+    )
+    system.secrets.set_secret(reference.uri, "preview-secret-value")
+    system.source.write_source_file(
+        revision.id,
+        "actions/read_secret.py",
+        "def run(ctx, input):\n    return {'ok': True}\n",
+        role="action",
+        language="python",
+    )
+    action = system.create_action(
+        revision.id,
+        "preview-secrets.read",
+        kind="normal",
+        entrypoint="actions/read_secret.py:run",
+        source_paths=["actions/read_secret.py"],
+        secret_ref_ids=[reference.id],
+    )
+    experience = system.create_experience("preview-secrets-ui", "Preview Secrets UI")
+    experience_revision = system.create_experience_revision(
+        experience.id,
+        ui_profile="none",
+        application_access=[
+            {
+                "application_id": app.id,
+                "action_ids": [action.action_id],
+                "secret_reference_ids": [reference.id],
+            }
+        ],
+    )
+    empty = system.create_development_deployment(
+        experience_revision.id,
+        {app.id: revision.id},
+        initialization="empty",
+    )
+    cloned = system.create_development_deployment(
+        experience_revision.id,
+        {app.id: revision.id},
+        initialization="clone",
+    )
+    client = TestClient(create_system_http_app(system))
+    empty_list = client.get(
+        f"/api/development/{empty.id}/apps/{app.id}/secrets"
+    )
+    cloned_list = client.get(
+        f"/api/development/{cloned.id}/apps/{app.id}/secrets"
+    )
+    cloned_status = client.get(
+        f"/api/development/{cloned.id}/apps/{app.id}/secrets/{reference.id}"
+    )
+    put = client.put(
+        f"/api/development/{cloned.id}/apps/{app.id}/secrets/{reference.id}",
+        json={"value": "rotated"},
+    )
+    delete = client.delete(
+        f"/api/development/{cloned.id}/apps/{app.id}/secrets/{reference.id}"
+    )
+
+    assert empty_list.status_code == 200
+    assert empty_list.json() == []
+    assert cloned_list.status_code == 200
+    assert cloned_list.json()[0]["configured"] is True
+    assert cloned_list.json()[0]["uri"] == reference.uri
+    assert cloned_list.json()[0]["secret_reference_id"] == reference.id
+    assert "value" not in cloned_list.json()[0]
+    assert cloned_status.status_code == 200
+    assert cloned_status.json()["configured"] is True
+    assert put.status_code == 405
+    assert delete.status_code == 405
+    assert backend.get(reference.uri) == "preview-secret-value"
+
+    system.expire_development_deployment(cloned.id)
+    expired = client.get(
+        f"/api/development/{cloned.id}/apps/{app.id}/secrets"
+    )
+    expired_status = client.get(
+        f"/api/development/{cloned.id}/apps/{app.id}/secrets/{reference.id}"
+    )
+    assert expired.status_code == 404
+    assert expired_status.status_code == 404
 
 
 def test_production_runtime_rejects_inspector_settings() -> None:

@@ -242,6 +242,43 @@ def create_system_http_app(
         except ValidationFailure as exc:
             return JSONResponse({"error": str(exc)}, status_code=409)
 
+    async def list_development_secrets(request: Request) -> JSONResponse:
+        try:
+            payload = runtime.list_development_secrets(
+                request.path_params["deployment_id"],
+                request.path_params["application_id"],
+            )
+            return JSONResponse(payload)
+        except (KeyError, ValidationFailure) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        except SecretBackendError:
+            return JSONResponse(
+                {
+                    "code": "secret_backend_error",
+                    "message": "secret backend operation failed",
+                },
+                status_code=502,
+            )
+
+    async def development_secret_status(request: Request) -> JSONResponse:
+        try:
+            payload = runtime.development_secret_status(
+                request.path_params["deployment_id"],
+                request.path_params["application_id"],
+                request.path_params["secret_reference_id"],
+            )
+            return JSONResponse(payload)
+        except (KeyError, ValidationFailure) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        except SecretBackendError:
+            return JSONResponse(
+                {
+                    "code": "secret_backend_error",
+                    "message": "secret backend operation failed",
+                },
+                status_code=502,
+            )
+
     async def deliver_development_file(request: Request) -> Response:
         try:
             delivered = (
@@ -701,6 +738,22 @@ def create_system_http_app(
                 "/api/invocations/{invocation_id:str}",
                 cancel_invocation,
                 methods=["DELETE"],
+            ),
+            Route(
+                (
+                    "/api/development/{deployment_id:str}/apps/"
+                    "{application_id:str}/secrets"
+                ),
+                list_development_secrets,
+                methods=["GET"],
+            ),
+            Route(
+                (
+                    "/api/development/{deployment_id:str}/apps/"
+                    "{application_id:str}/secrets/{secret_reference_id:str}"
+                ),
+                development_secret_status,
+                methods=["GET"],
             ),
             Route(
                 (
