@@ -60,8 +60,10 @@ Callbacks use `GET|POST /callback/{route_id}` and the generic MCP callback tools
 - checkpoint snapshot format `1`
 
 The test path is `sh scripts/ci.sh`: pytest, build this tree's image, then
-`scripts/release_smoke.sh` (fresh boot, import+enable, and upgrade from the
-previous `v*` GHCR image). It does not push or tag.
+`scripts/release_smoke.sh` — first-activate on an empty graph, then cutover
+from the previous `v*` image (recreate n4x only, keep Neo4j, import+enable).
+On a Mac, if GHCR is the wrong architecture, the previous image is a local
+rebuild of that git tag, not the shipped digest. It does not push or tag.
 
 Official releases run that same script on Ubuntu, then publish `linux/amd64`
 images (`ghcr.io/p451m/n4x-core:<tag>` and `:epoch-1`) plus

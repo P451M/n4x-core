@@ -15,11 +15,36 @@ fi
 
 docker build -f deploy/Dockerfile -t "$IMAGE" .
 
-PREV=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
-CANDIDATE=${IMAGE##*:}
-if [ -n "$PREV" ] && [ "$PREV" != "$CANDIDATE" ]; then
-  docker pull "${REPO}:${PREV}"
-  PREVIOUS_IMAGE="${REPO}:${PREV}"
+CANDIDATE_REF=${IMAGE##*:}
+PREV=$(
+  git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vx "$CANDIDATE_REF" | head -1 || true
+)
+unset PREVIOUS_IMAGE
+if [ -n "$PREV" ]; then
+  ghcr="${REPO}:${PREV}"
+  engine_arch=$(docker version -f '{{.Server.Arch}}')
+  if docker pull "$ghcr"; then
+    image_arch=$(docker image inspect -f '{{.Architecture}}' "$ghcr")
+    if [ "$image_arch" = "$engine_arch" ]; then
+      PREVIOUS_IMAGE=$ghcr
+      echo "previous=ghcr ${PREV}"
+    fi
+  fi
+  if [ -z "${PREVIOUS_IMAGE:-}" ]; then
+    if ! git rev-parse --verify "refs/tags/${PREV}" >/dev/null 2>&1; then
+      git fetch --tags
+    fi
+    if ! git rev-parse --verify "refs/tags/${PREV}" >/dev/null 2>&1; then
+      echo "previous tag ${PREV} is missing locally" >&2
+      exit 1
+    fi
+    tmp=$(mktemp -d)
+    git archive "$PREV" | tar -x -C "$tmp"
+    docker build -f "$tmp/deploy/Dockerfile" -t n4x:previous-local "$tmp"
+    rm -rf "$tmp"
+    PREVIOUS_IMAGE=n4x:previous-local
+    echo "previous=local-rebuild ${PREV} (not the shipped digest)"
+  fi
   export PREVIOUS_IMAGE
 fi
 

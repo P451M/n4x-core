@@ -13,9 +13,25 @@ from urllib.request import urlopen
 
 from n4x.host.identity import HOST_ADAPTER
 
+# Enable HTTP waits 300s so a failed enable can finish this wait and the
+# rollback start of the previous worker. Empty-graph CI is healthy in well
+# under 8s; a live instance must construct SystemRuntime, FastMCP, and the
+# scheduler before /health exists. 8s kills that process and returns a bare 503.
+WORKER_BOOT_TIMEOUT_SECONDS = 120.0
+WORKER_LOG_TAIL_BYTES = 8192
+
 
 class WorkerBootError(RuntimeError):
     """The System worker did not become healthy."""
+
+
+def worker_log_tail(log_path: Path, *, limit: int = WORKER_LOG_TAIL_BYTES) -> str:
+    if not log_path.is_file():
+        return ""
+    data = log_path.read_bytes()
+    if len(data) > limit:
+        data = data[-limit:]
+    return data.decode("utf-8", errors="replace").strip()
 
 
 def unused_loopback_port() -> int:
@@ -42,7 +58,7 @@ class WorkerSpec:
     env: dict[str, str] = field(default_factory=dict)
     cwd: Path | None = None
     health_path: str = "/health"
-    boot_timeout_seconds: float = 8.0
+    boot_timeout_seconds: float = WORKER_BOOT_TIMEOUT_SECONDS
 
     def resolved_command(self) -> list[str]:
         if self.command:
@@ -106,9 +122,13 @@ class WorkerSupervisor:
         )
         try:
             self._wait_healthy(worker)
-        except WorkerBootError:
+        except WorkerBootError as error:
+            log_handle.flush()
             self.current = worker
+            tail = worker_log_tail(log_path)
             self.stop()
+            if tail:
+                raise WorkerBootError(f"{error}\n--- worker log ---\n{tail}") from error
             raise
         self.current = worker
         return worker

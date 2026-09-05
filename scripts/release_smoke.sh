@@ -1,28 +1,63 @@
 #!/bin/sh
 # Smoke the official image the way a managed instance updates:
-# previous image (if set) boots a graph, the candidate Host replaces it,
-# then import+enable the zip baked into the candidate.
+# first-activate on an empty graph, then previous image (if set) on a
+# new Neo4j, recreate n4x only, import+enable the candidate zip.
 set -eu
 
+ROOT=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
 IMAGE=${IMAGE:?IMAGE is the candidate image tag}
 PREVIOUS_IMAGE=${PREVIOUS_IMAGE:-}
 PREFIX="n4x-smoke-$$"
-NETWORK="${PREFIX}-net"
-NEO4J="${PREFIX}-neo4j"
-N4X="${PREFIX}-n4x"
-VOLUME_N4X="${PREFIX}-data"
+COMPOSE_FILE="$ROOT/deploy/compose.smoke.yaml"
+WORKDIR=$(mktemp -d)
+ENV_FILE="$WORKDIR/.env"
+: > "$ENV_FILE"
 PASSWORD="smoke-$$"
 MASTER="smoke-master-key-$$-0123456789abcdef"
+PROJECT=
+
+write_env() {
+  image=$1
+  cat > "$ENV_FILE" <<EOF
+N4X_IMAGE=${image}
+N4X_NEO4J_PASSWORD=${PASSWORD}
+N4X_SECRETS_MASTER_KEY=${MASTER}
+N4X_PUBLIC_ORIGIN=http://127.0.0.1:7744
+N4X_HOST_CONTROL_ORIGIN=http://127.0.0.1:7744
+N4X_SYSTEM_RELEASE_INDEX=
+EOF
+  export N4X_IMAGE="$image"
+  export N4X_NEO4J_PASSWORD="$PASSWORD"
+  export N4X_SECRETS_MASTER_KEY="$MASTER"
+  export N4X_PUBLIC_ORIGIN=http://127.0.0.1:7744
+  export N4X_HOST_CONTROL_ORIGIN=http://127.0.0.1:7744
+}
+
+compose() {
+  docker compose -p "$PROJECT" -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
+}
+
+down_project() {
+  project=$1
+  docker compose -p "$project" -f "$COMPOSE_FILE" --env-file "$ENV_FILE" down -v >/dev/null 2>&1 || true
+}
 
 cleanup() {
-  docker rm -f "$N4X" "$NEO4J" >/dev/null 2>&1 || true
-  docker volume rm "$VOLUME_N4X" >/dev/null 2>&1 || true
-  docker network rm "$NETWORK" >/dev/null 2>&1 || true
+  down_project "${PREFIX}-fresh"
+  down_project "${PREFIX}-cutover"
+  rm -rf "$WORKDIR"
 }
 trap cleanup EXIT
 
+write_env "$IMAGE"
+
+up() {
+  write_env "$1"
+  compose up -d --wait --wait-timeout 600
+}
+
 health() {
-  docker exec "$N4X" python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:7744/health', timeout=3).read().decode())"
+  compose exec -T n4x python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:7744/health', timeout=3).read().decode())"
 }
 
 wait_health() {
@@ -36,7 +71,7 @@ wait_health() {
     sleep 3
   done
   echo "health timed out ($last)" >&2
-  docker logs "$N4X" >&2 || true
+  compose logs n4x >&2 || true
   return 1
 }
 
@@ -53,90 +88,31 @@ if not (body.get('system') or {}).get('content_root'):
 }
 
 enable_official() {
-  docker exec -i "$N4X" python - <<'PY'
-import json
-import os
-import urllib.request
-
-origin = os.environ.get("N4X_HOST_CONTROL_ORIGIN", "http://127.0.0.1:7744").rstrip("/")
-archive = "/opt/n4x/cache/official-system.zip"
-
-def post(path, payload, timeout):
-    request = urllib.request.Request(
-        origin + path,
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        body = json.loads(response.read().decode())
-    if not isinstance(body, dict) or body.get("error"):
-        raise SystemExit(path + " failed: " + json.dumps(body))
-    return body
-
-imported = post("/n4x-host/import", {"archive": archive}, 120)
-revision_id = imported.get("imported")
-if not revision_id:
-    raise SystemExit("import did not return a revision id: " + json.dumps(imported))
-print(json.dumps(post("/n4x-host/enable", {"revision_id": revision_id}, 180)))
-PY
-}
-
-start_neo4j() {
-  docker network create "$NETWORK" >/dev/null
-  docker volume create "$VOLUME_N4X" >/dev/null
-  docker run -d --name "$NEO4J" --network "$NETWORK" --network-alias neo4j \
-    -e NEO4J_AUTH="neo4j/${PASSWORD}" \
-    neo4j:5-community >/dev/null
-  deadline=$(( $(date +%s) + 180 ))
-  while [ "$(date +%s)" -lt "$deadline" ]; do
-    if docker exec "$NEO4J" cypher-shell -u neo4j -p "$PASSWORD" 'RETURN 1' >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 3
-  done
-  echo "neo4j did not become ready" >&2
-  docker logs "$NEO4J" >&2 || true
-  return 1
-}
-
-start_n4x() {
-  image=$1
-  docker rm -f "$N4X" >/dev/null 2>&1 || true
-  docker run -d --name "$N4X" --network "$NETWORK" \
-    -e N4X_RUNTIME_ROOT=/var/lib/n4x \
-    -e N4X_HTTP_MODE=production \
-    -e N4X_NEO4J_URI=bolt://neo4j:7687 \
-    -e N4X_NEO4J_USER=neo4j \
-    -e "N4X_NEO4J_PASSWORD=${PASSWORD}" \
-    -e N4X_NEO4J_DATABASE=neo4j \
-    -e N4X_PUBLIC_ORIGIN=http://127.0.0.1:7744 \
-    -e "N4X_SECRETS_MASTER_KEY=${MASTER}" \
-    -e N4X_SECRET_BACKEND=encrypted_local \
-    -e N4X_HOST_CONTROL_ORIGIN=http://127.0.0.1:7744 \
-    -v "${VOLUME_N4X}:/var/lib/n4x" \
-    "$image" >/dev/null
+  if ! compose exec -T n4x python - < "$ROOT/scripts/enable_official_system.py"; then
+    echo "enable official System failed" >&2
+    compose logs n4x >&2 || true
+    compose exec -T n4x sh -c 'tail -n 200 /var/lib/n4x/runtime/*.log 2>/dev/null || true' >&2 || true
+    return 1
+  fi
 }
 
 echo "fresh boot ${IMAGE}"
-start_neo4j
-start_n4x "$IMAGE"
+PROJECT="${PREFIX}-fresh"
+up "$IMAGE"
 require_worker "$(wait_health)"
 echo "enable official System on fresh graph"
 enable_official
 require_worker "$(wait_health)"
+compose down -v
 
 if [ -n "$PREVIOUS_IMAGE" ]; then
   echo "upgrade ${PREVIOUS_IMAGE} -> ${IMAGE}"
-  docker rm -f "$N4X" "$NEO4J" >/dev/null 2>&1 || true
-  docker volume rm "$VOLUME_N4X" >/dev/null 2>&1 || true
-  docker network rm "$NETWORK" >/dev/null 2>&1 || true
-  start_neo4j
-  start_n4x "$PREVIOUS_IMAGE"
+  PROJECT="${PREFIX}-cutover"
+  up "$PREVIOUS_IMAGE"
   require_worker "$(wait_health)"
   echo "replace Host with ${IMAGE}"
-  start_n4x "$IMAGE"
-  # Host must answer even if the previous System worker cannot start.
+  write_env "$IMAGE"
+  compose up -d --no-deps --force-recreate --wait --wait-timeout 600 n4x
   wait_health >/dev/null
   echo "enable official System from candidate zip"
   enable_official

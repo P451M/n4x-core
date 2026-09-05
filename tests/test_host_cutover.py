@@ -8,7 +8,12 @@ from starlette.testclient import TestClient
 
 from n4x.host.identity import HOST_ADAPTER
 from n4x.host.supervisor import Host
-from n4x.host.worker import WorkerBootError, WorkerSpec, WorkerSupervisor
+from n4x.host.worker import (
+    WORKER_BOOT_TIMEOUT_SECONDS,
+    WorkerBootError,
+    WorkerSpec,
+    WorkerSupervisor,
+)
 from n4x.testing import InMemoryGraphStore
 from tests.host_support import official_archive, make_host
 
@@ -96,6 +101,33 @@ def test_hung_import_does_not_take_host_control(tmp_path: Path) -> None:
         host.release()
 
 
+def test_worker_boot_error_includes_process_log(tmp_path: Path) -> None:
+    supervisor = WorkerSupervisor(tmp_path / "crash-runtime")
+    root = tmp_path / "crash-materialized"
+    root.mkdir()
+    with pytest.raises(WorkerBootError, match="boot-crash-marker"):
+        supervisor.start(
+            WorkerSpec(
+                revision_id="crash",
+                materialized_root=root,
+                command=[
+                    sys.executable,
+                    "-c",
+                    (
+                        "import sys\n"
+                        "print('boot-crash-marker', file=sys.stderr)\n"
+                        "raise SystemExit(1)\n"
+                    ),
+                ],
+                boot_timeout_seconds=0.8,
+            )
+        )
+    assert WORKER_BOOT_TIMEOUT_SECONDS == 120
+    assert (
+        WorkerSpec(revision_id="x", materialized_root=root).boot_timeout_seconds == 120
+    )
+
+
 def test_host_control_http_rejects_non_loopback(tmp_path: Path) -> None:
     host = make_host(tmp_path)
     try:
@@ -136,7 +168,15 @@ def _failing_spec(host: Host, revision_id: str | None = None):
     def spec_for(revision):
         spec = original(revision)
         if revision_id is None or revision.id == revision_id:
-            spec.command = [sys.executable, "-c", "raise SystemExit(1)"]
+            spec.command = [
+                sys.executable,
+                "-c",
+                (
+                    "import sys\n"
+                    "print('boot-crash-marker', file=sys.stderr)\n"
+                    "raise SystemExit(1)\n"
+                ),
+            ]
             spec.boot_timeout_seconds = 0.8
         return spec
 
@@ -182,6 +222,7 @@ def test_failed_enable_does_not_move_the_enabled_edge(tmp_path: Path) -> None:
         )
         assert refused.status_code == 503
         assert refused.json()["error"] == "system_worker_unavailable"
+        assert "boot-crash-marker" in refused.json()["detail"]
         still = host.system_graph.enabled_revision()
         assert still is not None
         assert still.id == first.id
